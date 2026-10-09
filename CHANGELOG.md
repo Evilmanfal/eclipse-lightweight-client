@@ -1,3 +1,17 @@
+# Eclipse 0.8.1 — October 9, 2026
+
+- Bottom-left account bar spans the server rail and channel list: nameplate background (theme colour without one), avatar, styled name and status, borderless activity/mute/deafen/settings controls with input and output device menus. Removed the Live and Push to Talk labels.
+- Conversation header: one "Search <server>" box filters messages and members; pins and member list are small icons; refresh button removed. The member list no longer has its own search or online count.
+- Pinned messages open as an anchored dropdown. Drag its bottom edge to resize (saved); click a pin to jump to it, loading surrounding history for older pins with Jump to present to return.
+- Right-click → Profile (or a popout avatar) opens a full profile with bio, member-since dates, roles, connections and mutual servers/friends. Profiles use theme colours as gradients with the banner fading in. Clicking the same person again closes their popout.
+- Chat drops the YOU tag and presence dots on avatars.
+- Friends is a compact list with round message/profile icons and an Active Now column of friends' current activities.
+- Ctrl+V in the message bar attaches copied files and images (screenshots, browser images).
+- Voice channels list everyone connected from any Discord client, with mute, deafen, camera and LIVE indicators.
+- Push to talk gates an always-open microphone for instant start/stop, with press and release tones.
+- Tighter spacing in the Direct messages navigation.
+- GitHub Actions builds and tests every push on Windows; version tags publish Eclipse.exe as a release.
+
 # Eclipse 0.8 — October 8, 2026
 
 - Animated avatars, server icons, emoji, banners, profile effects, shop artwork and name effects play only while hovered and return to their first frame afterward. GIFs in chat and in the GIF picker still play automatically.
