@@ -1,5 +1,6 @@
 # Unreleased
 
+- Live voice ping next to "Voice connected": the round trip to Discord's voice server, updated every few seconds and colored green, yellow or red.
 - Being moved to another voice channel (by a moderator, or a bot's "join to create" channel) now follows you there and reconnects, instead of disconnecting you.
 - New, renamed and deleted channels appear live in the server list (Eclipse ignored these events before, so a bot's new voice channel never showed up).
 - Drag someone under a voice channel onto another voice channel to move them (with Move Members); the target highlights and their name follows the pointer.

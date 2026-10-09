@@ -297,7 +297,9 @@ impl Eclipse {
         let Some(channel)=self.calls.channel().cloned()else{return;};
         egui::Frame::NONE.fill(SIDE).corner_radius(10).inner_margin(10).show(ui,|ui|{
             ui.set_min_width(ui.available_width());ui.horizontal(|ui|{
-                ui.vertical(|ui|{ui.label(RichText::new(if self.preview{"Voice preview"}else{self.calls.connection_label()}).size(12.).strong().color(Color32::from_rgb(94,200,148)));ui.add(egui::Label::new(RichText::new(channel.label()).size(11.).color(MUTED)).truncate());});
+                ui.vertical(|ui|{ui.horizontal(|ui|{ui.spacing_mut().item_spacing.x=6.;ui.label(RichText::new(if self.preview{"Voice preview"}else{self.calls.connection_label()}).size(12.).strong().color(Color32::from_rgb(94,200,148)));
+                    // Live ping to Discord's voice server, coloured like Discord's connection bars.
+                    if let Some(ms)=self.calls.ping(){ui.label(RichText::new(format!("{ms} ms")).size(11.).strong().color(ping_color(ms))).on_hover_text("Ping to Discord's voice server, updated with every heartbeat");}});ui.add(egui::Label::new(RichText::new(channel.label()).size(11.).color(MUTED)).truncate());});
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{if crate::widgets::control(ui,crate::widgets::Control::Hangup,false,28.,"Disconnect from voice").clicked(){self.calls.leave();}if ui.small_button("View").on_hover_text("Open call view").clicked(){self.calls.chat=false;}});
             });
         });ui.add_space(8.);
@@ -333,3 +335,6 @@ pub(in crate::ui) fn voice_moderation_menu(ui:&mut egui::Ui,state:&crate::voice_
 
 /// Someone being dragged to another voice channel.
 pub(in crate::ui) struct VoiceDrag { user: String, name: String, from: String, guild: String }
+
+/// Green under 100 ms, yellow under 250 ms, red above, like Discord's connection indicator.
+fn ping_color(ms:u32)->Color32{if ms<100{Color32::from_rgb(35,165,90)}else if ms<250{Color32::from_rgb(240,178,50)}else{Color32::from_rgb(242,63,67)}}

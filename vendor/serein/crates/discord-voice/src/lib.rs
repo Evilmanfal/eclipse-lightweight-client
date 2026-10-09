@@ -62,6 +62,8 @@ pub enum Status {
 	RemoteAudio,
 	/// Latest active user IDs, zero-padded to the 64-participant limit.
 	Speaking(Box<[u64; 64]>),
+	/// Eclipse: round trip of the latest voice heartbeat, in milliseconds (the call's ping).
+	Ping(u32),
 }
 
 #[cfg(test)]

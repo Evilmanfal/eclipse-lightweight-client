@@ -96,6 +96,8 @@ pub struct Calls {
     join_order: Vec<String>,
     /// We were moved to another channel and still need its details from the app.
     moved: bool,
+    /// Round trip to Discord's voice server, from the latest heartbeat.
+    ping_ms: Option<u32>,
     speaking: Vec<u64>,
     frames: Arc<Mutex<HashMap<u64, VideoFrame>>>,
     textures: HashMap<u64, egui::TextureHandle>,
@@ -205,6 +207,7 @@ impl Calls {
             participants: HashMap::new(),
             join_order: Vec::new(),
             moved: false,
+            ping_ms: None,
             speaking: vec![],
             channel: None,
             user: None,
@@ -291,6 +294,7 @@ impl Calls {
         self.participants.clear();
         self.join_order.clear();
         self.speaking.clear();
+        self.ping_ms = None;
         self.pending_watch = None;
         self.left_stream = None;
         self.media = None;
@@ -496,6 +500,7 @@ impl Calls {
         self.stop_watching();
         self.media = None;
         self.ready = false;
+        self.ping_ms = None;
         self.epoch = self.epoch.wrapping_add(1);
         self.active_epoch.store(self.epoch, Ordering::Release);
         self.textures.clear();
@@ -859,6 +864,7 @@ impl Calls {
                             continue;
                         }
                         Status::CameraAvailable(_) => continue,
+                        Status::Ping(ms) => { self.ping_ms = Some(ms); continue; }
                     };
                     if self.ready&&!self.join_announced{self.join_announced=true;crate::sounds::play(crate::sounds::Cue::Join,self.prefs.ui_sounds);}
                 }
@@ -1105,7 +1111,7 @@ impl Calls {
     pub fn preview(&mut self,channel:Channel,user:User,peers:Vec<User>){
         self.disconnect();self.channel=Some(channel);self.user=Some(user.clone());self.participants.insert(user.id.clone(),user);
         for user in peers.into_iter().take(3){self.participants.insert(user.id.clone(),user);}
-        self.status="Offline call preview · no devices or network active".into();self.chat=false;
+        self.status="Offline call preview · no devices or network active".into();self.chat=false;self.ping_ms=Some(42);
     }
     pub fn show(&mut self, ctx: &egui::Context, _images: &mut crate::assets::Images) -> Vec<Value> {
         if self.share_picker {
@@ -1220,6 +1226,8 @@ impl Calls {
     }
     pub fn active(&self)->bool{self.channel.is_some()}
     pub fn channel(&self)->Option<&Channel>{self.channel.as_ref()}
+    /// The call's live ping in milliseconds, once the voice server has answered a heartbeat.
+    pub fn ping(&self)->Option<u32>{self.ping_ms.filter(|_|self.active())}
     pub fn connection_label(&self)->&str{if self.ready{"Voice connected"}else{"Connecting voice…"}}
     pub fn self_speaking(&self)->bool{
         // Keep checking the push-to-talk key so the green ring follows it even while Eclipse is idle.
