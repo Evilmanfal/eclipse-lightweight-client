@@ -239,7 +239,13 @@ impl Eclipse {
         }
         app
     }
-    fn surface(&self)->egui::Frame{surface().fill(crate::preferences::color(&self.prefs.theme.surface).unwrap_or(SIDE))}
+    fn surface_color(&self)->Color32{crate::preferences::color(&self.prefs.theme.surface).unwrap_or(SIDE)}
+    /// Compact mode joins the panels into one square-edged surface; separator lines divide them.
+    fn surface(&self)->egui::Frame{if self.compact{egui::Frame::NONE.fill(self.surface_color())}else{surface().fill(self.surface_color())}}
+    /// The outer frame of a docked panel: a background gap around a rounded card, or no gap in compact mode.
+    fn panel_frame(&self,margin:egui::Margin)->egui::Frame{if self.compact{egui::Frame::NONE.fill(self.surface_color())}else{egui::Frame::NONE.fill(preferences_bg(&self.prefs)).inner_margin(margin)}}
+    /// Inner padding of a panel card, reduced in compact mode.
+    fn pad(&self,normal:i8)->i8{if self.compact{(normal*3/5).max(2)}else{normal}}
     fn accent(&self)->Color32{crate::preferences::color(&self.prefs.theme.accent).unwrap_or(ACCENT)}
     fn load_demo(&mut self) {
         let (user, guilds, channels, messages) = demo();
@@ -318,6 +324,7 @@ impl Eclipse {
             "emoji"|"gifs"=>{if let Some(channel)=&self.channel{self.picker.open(if section=="emoji"{crate::media_picker::Mode::Emoji}else{crate::media_picker::Mode::Gif},&channel.id,self.guild.as_deref(),egui::Rect::from_min_size(egui::pos2(960.,780.),Vec2::splat(30.)));}},
             "zoom-in"=>self.prefs.zoom=1.5,
             "zoom-out"=>self.prefs.zoom=0.75,
+            "compact"=>self.prefs.compact=true,
             "settings-zoom"=>{self.prefs.zoom=1.5;self.settings=true;},
             "server-zoom"=>{self.prefs.zoom=1.5;self.server_settings=true;},
             "quick-actions"=>{self.preview_gesture=Some("message");if let Some(message)=self.messages.back_mut(){if let Some(user)=&self.user{message.author=user.clone();}}},
@@ -882,11 +889,11 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
     /// Server rail and channel list share one column so the account bar can span both, like Discord.
     fn left_column(&mut self, ctx: &egui::Context) {
         let sidebar=if ctx.screen_rect().width()<900.0{224.0}else{248.0};
-        egui::SidePanel::left("left-column").exact_width(70.0+sidebar).resizable(false).show_separator_line(false)
+        egui::SidePanel::left("left-column").exact_width(70.0+sidebar).resizable(false).show_separator_line(self.compact)
             .frame(egui::Frame::NONE.fill(preferences_bg(&self.prefs)))
             .show(ctx,|ui|{
-                egui::TopBottomPanel::bottom("user-panel").exact_height(panels::USER_PANEL_HEIGHT+5.0).show_separator_line(false)
-                    .frame(egui::Frame::NONE.inner_margin(egui::Margin{left:4,right:3,top:0,bottom:5}))
+                egui::TopBottomPanel::bottom("user-panel").exact_height(panels::USER_PANEL_HEIGHT+if self.compact{0.0}else{5.0}).show_separator_line(self.compact)
+                    .frame(if self.compact{egui::Frame::NONE}else{egui::Frame::NONE.inner_margin(egui::Margin{left:4,right:3,top:0,bottom:5})})
                     .show_inside(ui,|ui|self.user_panel(ui));
                 self.rail(ui);
                 self.sidebar(ui,sidebar);
@@ -896,15 +903,11 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
         egui::SidePanel::left("server-rail")
             .exact_width(70.0)
             .resizable(false)
-            .show_separator_line(false)
-            .frame(
-                egui::Frame::NONE
-                    .fill(preferences_bg(&self.prefs))
-                    .inner_margin(egui::Margin::symmetric(4, 5)),
-            )
+            .show_separator_line(self.compact)
+            .frame(self.panel_frame(egui::Margin::symmetric(4, 5)))
             .show_inside(ui, |ui| {
                 let height = ui.available_height() - 12.0;
-                self.surface().inner_margin(6).show(ui, |ui| {
+                self.surface().inner_margin(self.pad(6)).show(ui, |ui| {
                     ui.set_min_height(height);
                     ui.spacing_mut().item_spacing.y=3.0;
                     if moon_button(ui,self.guild.is_none()).on_hover_text("Direct messages").clicked() {
@@ -1254,16 +1257,12 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             .exact_width(width)
             .resizable(false)
             .show_separator_line(false)
-            .frame(
-                egui::Frame::NONE
-                    .fill(preferences_bg(&self.prefs))
-                    .inner_margin(egui::Margin::symmetric(3, 5)),
-            )
+            .frame(self.panel_frame(egui::Margin::symmetric(3, 5)))
             .show_inside(ui, |ui| {
                 let spotify_height=if self.spotify.as_ref().is_some_and(|s|s.track.available){155.}else{0.};
                 let call_height=if self.calls.channel().is_some(){80.0}else{0.0};
                 let channel_height = (ui.available_height()-spotify_height-call_height).max(230.0);
-                self.surface().inner_margin(10).show(ui, |ui| {
+                self.surface().inner_margin(self.pad(10)).show(ui, |ui| {
                     ui.set_min_height(channel_height - 20.0);
                     ui.set_min_width(ui.available_width());
                     let name = self
@@ -1406,16 +1405,12 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
     }
     fn conversation_header(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("conversation-header")
-            .exact_height(60.0)
-            .show_separator_line(false)
-            .frame(
-                egui::Frame::NONE
-                    .fill(preferences_bg(&self.prefs))
-                    .inner_margin(egui::Margin::symmetric(3, 5)),
-            )
+            .exact_height(if self.compact { 48.0 } else { 60.0 })
+            .show_separator_line(self.compact)
+            .frame(self.panel_frame(egui::Margin::symmetric(3, 5)))
             .show(ctx, |ui| {
                 self.surface()
-                    .inner_margin(egui::Margin::symmetric(12, 8))
+                    .inner_margin(egui::Margin::symmetric(self.pad(12), self.pad(8)))
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
                         ui.horizontal(|ui| {
@@ -1511,8 +1506,8 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
         if self.guild.is_none(){if let Some(channel)=&self.channel{for user in &channel.recipients{members.entry(user.id.clone()).or_insert_with(||crate::community::Member{user:user.clone(),..Default::default()});}}}
         let group=|member:&crate::community::Member|{let offline=matches!(self.presences.get(&member.user.id,self.guild.as_deref()),crate::presence::Status::Offline);let role=self.server.roles.iter().filter(|r|r.hoist&&member.roles.contains(&r.id)).max_by_key(|r|r.position);if offline{(i32::MAX,"Offline".to_string())}else if let Some(role)=role{(-role.position,role.name.clone())}else{(0,"Online".to_string())}};
         let mut members:Vec<_>=members.into_values().collect();members.sort_by_key(|m|(group(m).0,m.name().to_lowercase()));
-        egui::SidePanel::right("members").exact_width(238.).resizable(false).show_separator_line(false).frame(egui::Frame::NONE.fill(preferences_bg(&self.prefs)).inner_margin(egui::Margin::symmetric(3,3))).show(ctx,|ui|{
-            let height=ui.available_height()-20.;self.surface().inner_margin(10).show(ui,|ui|{ui.set_min_height(height);ui.set_min_width(ui.available_width());
+        egui::SidePanel::right("members").exact_width(238.).resizable(false).show_separator_line(self.compact).frame(self.panel_frame(egui::Margin::symmetric(3,3))).show(ctx,|ui|{
+            let height=ui.available_height()-20.;self.surface().inner_margin(self.pad(10)).show(ui,|ui|{ui.set_min_height(height);ui.set_min_width(ui.available_width());
                 egui::ScrollArea::vertical().id_salt("member-list").max_height(height-20.).show(ui,|ui|{ui.spacing_mut().item_spacing.y=4.0;let mut previous=String::new();let search=self.search.to_lowercase();for member in members.iter().filter(|m|m.name().to_lowercase().contains(&search)||m.user.username.to_lowercase().contains(&search)).cloned().collect::<Vec<_>>(){
                     let offline=matches!(self.presences.get(&member.user.id,self.guild.as_deref()),crate::presence::Status::Offline);let role=self.server.roles.iter().filter(|r|r.hoist&&member.roles.contains(&r.id)).max_by_key(|r|r.position);let group=if offline{"OFFLINE".into()}else{role.map(|r|r.name.to_uppercase()).unwrap_or("ONLINE".into())};if group!=previous{ui.add_space(8.);ui.label(RichText::new(&group).size(10.).strong().color(MUTED));previous=group;}
                     let color=if self.prefs.role_colors{self.server.color(&member.user.id).unwrap_or(TEXT)}else{TEXT};
@@ -1522,10 +1517,10 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
         });
     }
     fn conversation(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(preferences_bg(&self.prefs)).inner_margin(egui::Margin::symmetric(3,3)))
+        egui::CentralPanel::default().frame(self.panel_frame(egui::Margin::symmetric(3,3)))
             .show(ctx,|ui| {
                 let height=ui.available_height()-20.0;
-                self.surface().inner_margin(10).show(ui,|ui| {
+                self.surface().inner_margin(self.pad(10)).show(ui,|ui| {
                     ui.set_min_height(height);ui.set_min_width(ui.available_width());
                     let Some(channel)=self.channel.clone()else{
                         ui.add_space(ui.available_height()*0.3);ui.vertical_centered(|ui| {
@@ -1572,7 +1567,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                                 let fade=1.0-((now-start)/2.5) as f32;
                                 if fade>0.0{let [r,g,b,_]=self.accent().to_array();ui.painter().set(bg,egui::Shape::rect_filled(rect.expand2(Vec2::new(6.0,3.0)),6,Color32::from_rgba_unmultiplied(r,g,b,(fade*55.0) as u8)));ui.ctx().request_repaint();}
                             }
-                            ui.add_space(if self.compact{2.0}else{6.0});
+                            ui.add_space(if self.compact{0.0}else{6.0});
                         }
                         ui.add_space(12.0);
                     });
@@ -1592,12 +1587,12 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
         let response = ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()),|ui| {egui::Frame::NONE
             .fill(Color32::TRANSPARENT)
             .corner_radius(19)
-            .inner_margin(egui::Margin::symmetric(8, 4))
+            .inner_margin(egui::Margin::symmetric(8, if self.compact { 2 } else { 4 }))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 if let Some(reply) = &message.referenced_message {
                     ui.horizontal(|ui| {
-                        ui.add_space(if self.compact { 0.0 } else { 49.0 });
+                        ui.add_space(49.0);
                         self.avatar_with_status(
                             ui,
                             &reply.author,
@@ -1622,16 +1617,14 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     ui.add_space(2.0);
                 }
                 ui.horizontal_top(|ui| {
-                    if !self.compact {
-                        self.avatar_with_status(
-                            ui,
-                            &message.author,
-                            message.member.as_ref().and_then(|m| m.avatar.as_deref()),
-                            40.0,
-                            false,
-                        );
-                        ui.add_space(5.0);
-                    }
+                    self.avatar_with_status(
+                        ui,
+                        &message.author,
+                        message.member.as_ref().and_then(|m| m.avatar.as_deref()),
+                        40.0,
+                        false,
+                    );
+                    ui.add_space(5.0);
                     // Plain chat text keeps server chats, group DMs and DMs visually consistent.
                     ui.vertical(|ui| {
                     egui::Frame::NONE
@@ -2068,11 +2061,11 @@ impl eframe::App for Eclipse {
             }
         }
         egui::TopBottomPanel::bottom("status")
-            .exact_height(28.0)
+            .exact_height(if self.compact { 22.0 } else { 28.0 })
             .frame(
                 egui::Frame::NONE
                     .fill(RAIL)
-                    .inner_margin(egui::Margin::symmetric(16, 5)),
+                    .inner_margin(egui::Margin::symmetric(if self.compact { 10 } else { 16 }, if self.compact { 3 } else { 5 })),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -2104,7 +2097,7 @@ impl eframe::App for Eclipse {
             self.login(ctx);
         } else {
             self.left_column(ctx);
-            if self.home!=Home::Chat{self.home_panel(ctx);}else{self.conversation_header(ctx);if self.calls.active()&&!self.calls.chat{egui::CentralPanel::default().frame(egui::Frame::NONE.fill(preferences_bg(&self.prefs)).inner_margin(8)).show(ctx,|ui|self.calls.stage(ui,&mut self.images));}else{self.members(ctx);self.conversation(ctx);}}
+            if self.home!=Home::Chat{self.home_panel(ctx);}else{self.conversation_header(ctx);if self.calls.active()&&!self.calls.chat{egui::CentralPanel::default().frame(egui::Frame::NONE.fill(preferences_bg(&self.prefs)).inner_margin(if self.compact{0}else{8})).show(ctx,|ui|self.calls.stage(ui,&mut self.images));}else{self.members(ctx);self.conversation(ctx);}}
         }
         self.dialogs(ctx);
         if self.home!=Home::Chat||self.settings||self.server_settings||self.channel.as_ref().is_none_or(|c|c.id!=self.picker.channel)||self.calls.active()&&!self.calls.chat{self.picker.close();}

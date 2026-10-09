@@ -8,8 +8,9 @@ impl Eclipse {
     pub(in crate::ui) fn user_panel(&mut self,ui:&mut egui::Ui){
         let user=self.user.clone().unwrap_or_default();
         let (rect,_)=ui.allocate_exact_size(Vec2::new(ui.available_width(),USER_PANEL_HEIGHT),egui::Sense::hover());
-        ui.painter().rect_filled(rect,12,crate::preferences::color(&self.prefs.theme.surface).unwrap_or(SIDE));
-        crate::identity::paint_art(ui,&mut self.images,rect,crate::identity::nameplate(&user),12);
+        let radius=if self.compact{0}else{12};
+        ui.painter().rect_filled(rect,radius,crate::preferences::color(&self.prefs.theme.surface).unwrap_or(SIDE));
+        crate::identity::paint_art(ui,&mut self.images,rect,crate::identity::nameplate(&user),radius);
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink2(Vec2::new(8.,0.))).layout(egui::Layout::left_to_right(egui::Align::Center)),|ui|{
             ui.spacing_mut().item_spacing.x=2.;
             self.user_avatar(ui,&user,None,34.);ui.add_space(6.);
