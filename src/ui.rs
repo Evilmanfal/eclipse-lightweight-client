@@ -907,7 +907,9 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             .frame(self.panel_frame(egui::Margin::symmetric(4, 5)))
             .show_inside(ui, |ui| {
                 let height = ui.available_height() - 12.0;
-                self.surface().inner_margin(self.pad(6)).show(ui, |ui| {
+                // Rail buttons are laid out for a 48-point column; compact mode keeps that column centred.
+                let margin = if self.compact { egui::Margin::symmetric(11, 4) } else { egui::Margin::same(6) };
+                self.surface().inner_margin(margin).show(ui, |ui| {
                     ui.set_min_height(height);
                     ui.spacing_mut().item_spacing.y=3.0;
                     if moon_button(ui,self.guild.is_none()).on_hover_text("Direct messages").clicked() {
@@ -1614,7 +1616,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                             .truncate(),
                         );
                     });
-                    ui.add_space(2.0);
+                    ui.add_space(if self.compact { 0.0 } else { 2.0 });
                 }
                 ui.horizontal_top(|ui| {
                     self.avatar_with_status(
@@ -1628,9 +1630,10 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     // Plain chat text keeps server chats, group DMs and DMs visually consistent.
                     ui.vertical(|ui| {
                     egui::Frame::NONE
-                        .inner_margin(egui::Margin::symmetric(0, 3))
+                        .inner_margin(egui::Margin::symmetric(0, if self.compact { 0 } else { 3 }))
                         .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
+                        if self.compact { ui.spacing_mut().item_spacing.y = 0.0; }
                         ui.horizontal_wrapped(|ui| {
                             let author_response=crate::identity::name(ui,&message.author,message.author.name(),15.,if self.prefs.role_colors{self.server.color(&message.author.id).unwrap_or_else(||name_color(message.author.name()))}else{TEXT});
                             self.guild_tag_chip(ui,&message.author);
