@@ -22,6 +22,7 @@ mod widgets;
 mod zoom;
 mod clipboard;
 mod voice_roster;
+mod login;
 mod message_time;
 
 use eframe::egui;

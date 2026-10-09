@@ -2,7 +2,11 @@
 
 - The selected server's icon, nameplates, avatar decorations and display-name effects keep animating; other avatars, icons and artwork still animate on hover.
 - Fixed Shop and Quests constantly reloading server icons and avatars: off-screen cards no longer request artwork, and the image cache evicts icons and avatars last.
-- The Direct messages title is now a centered search bar for finding conversations; the Eclipse icon and the separate Find a conversation box are gone, moving the DM list up.
+- The Direct messages header is now a centered conversation search; the Eclipse icon and the separate search box under Quests are gone, moving the DM list up.
+- The conversation search at the top reads Find A Conversation, clears while you type and returns when left empty.
+- Shop cards stay still until hovered, and the image cache never evicts on-screen images (keeping a new animation still instead), fixing decorations, nameplates and Shop/Quests art reloading constantly.
+- New sign-in: QR code via the Discord mobile app, or email/phone and password with authenticator, backup-code and SMS 2FA. Token entry is removed.
+- Stay signed in: the session is saved in Windows Credential Manager and resumed at launch; Log out forgets it.
 - Clicking your avatar or name in the bottom-left bar opens a Discord-style account menu: profile banner and bio, Edit Profile, status (Online, Idle, Do Not Disturb, Invisible), Switch Accounts (log out) and Copy User ID.
 
 # Eclipse 0.8.1 — October 9, 2026

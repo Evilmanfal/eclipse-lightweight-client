@@ -27,7 +27,8 @@ impl Eclipse {
             let tint=if kind==1{Color32::from_rgb(65,54,104)}else if kind==2{Color32::from_rgb(38,72,87)}else{Color32::from_rgb(58,47,83)};
             ui.painter().rect_filled(rect,9,tint);
             let effects=self.features.get("profile-effects").cloned().unwrap_or(Value::Null);
-            let image=product_image(product,&effects,self.prefs.animations&&!self.prefs.reduced_motion);
+            // Cards stay still until hovered, like Discord; a grid of animated previews would overflow the image cache.
+            let image=product_image(product,&effects,self.prefs.animations&&!self.prefs.reduced_motion&&ui.rect_contains_pointer(rect));
             if kind==1&&!self.preview&&!self.features.contains_key("profile-effects")&&!self.feature_errors.contains_key("profile-effects"){self.request_feature("profile-effects","/user-profile-effects".into());}
             if let Some(background)=product["preview_assets"]["bg_static"].as_str().and_then(collectible_asset){crate::identity::paint_art(ui,&mut self.images,rect,Some(background),9);}
             // Off-screen cards must not request art: a large catalog would churn the shared image cache.
@@ -94,6 +95,11 @@ fn collectible_asset(asset:&str)->Option<String>{
     let url=format!("https://cdn.discordapp.com/{path}");assets::public_url(&url).then_some(url)
 }
 fn product_image(product:&Value,effects:&Value,animated:bool)->Option<String>{
+    // Decoration presets are animated APNGs unless passthrough is off.
+    let url=product_art(product,effects,animated)?;
+    Some(if animated{url}else{url.replace("passthrough=true","passthrough=false")})
+}
+fn product_art(product:&Value,effects:&Value,animated:bool)->Option<String>{
     let preview=&product["preview_assets"];
     let candidates=if animated{[&preview["fg_animated"],&preview["fg_static"]]}else{[&preview["fg_static"],&preview["fg_animated"]]};
     if let Some(url)=candidates.into_iter().find_map(|v|v.as_str().and_then(collectible_asset)){return Some(url);}

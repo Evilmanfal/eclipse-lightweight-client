@@ -84,7 +84,7 @@ impl Eclipse {
             Some(Action::Status(value))=>{self.set_status(value);self.account_expanded=None;}
             Some(Action::FullProfile)=>{self.account_anchor=None;self.open_full_profile(&me);}
             Some(Action::CopyId)=>{ctx.copy_text(me.id.clone());self.account_anchor=None;}
-            Some(Action::LogOut)=>{self.account_anchor=None;self.disconnect();}
+            Some(Action::LogOut)=>{self.account_anchor=None;self.log_out();}
             None=>{}
         }
     }

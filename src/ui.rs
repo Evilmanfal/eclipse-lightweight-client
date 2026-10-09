@@ -40,7 +40,11 @@ pub struct Eclipse {
     channel: Option<Channel>,
     messages: VecDeque<Message>,
     navigation: crate::navigation::Cache,
-    token: String,
+    login_ui: panels::LoginUi,
+    /// Token from a sign-in in progress; saved to Credential Manager once Discord accepts it.
+    pending_save: Option<zeroize::Zeroizing<String>>,
+    /// This session was restored from the saved sign-in at launch.
+    auto_login: bool,
     error: Option<String>,
     status: String,
     drafts: HashMap<String, String>,
@@ -139,7 +143,13 @@ pub struct Eclipse {
     composer_ime: bool,
 }
 impl Eclipse {
-    pub fn new(cc: &eframe::CreationContext<'_>, preview: bool, smoke: Option<String>) -> Self {Self::with_context(&cc.egui_ctx,preview,smoke)}
+    pub fn new(cc: &eframe::CreationContext<'_>, preview: bool, smoke: Option<String>) -> Self {
+        let restore=!preview&&smoke.is_none();
+        let mut app=Self::with_context(&cc.egui_ctx,preview,smoke);
+        // Stay signed in: resume the session saved in Windows Credential Manager.
+        if restore{if let Some(token)=crate::login::saved::load(){app.begin_session(token,&cc.egui_ctx);app.auto_login=true;}}
+        app
+    }
     fn with_context(ctx:&egui::Context,preview:bool,smoke:Option<String>)->Self {
         crate::widgets::fonts(&ctx);
         ctx.set_theme(egui::ThemePreference::Dark);
@@ -184,7 +194,9 @@ impl Eclipse {
             channel: None,
             messages: VecDeque::new(),
             navigation: Default::default(),
-            token: String::new(),
+            login_ui: Default::default(),
+            pending_save: None,
+            auto_login: false,
             error: None,
             status: "Offline".into(),
             drafts: HashMap::new(),
@@ -383,7 +395,6 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
         self.status = "Offline".into();
         self.error = None;
         self.search.clear();
-        self.token.zeroize();
         self.features.clear();self.feature_errors.clear();self.feature_pending.clear();self.server=Default::default();self.voice.clear();self.voice_lookups.clear();self.friends.clear();self.profile=None;self.account_edit=serde_json::Value::Null;self.settings_edit=serde_json::Value::Null;self.server_edit=serde_json::Value::Null;self.logs.clear();self.reply=None;self.read_latest.clear();self.confirm=None;self.home=Home::Chat;
     }
     fn send_command(&mut self, command: Command) -> bool {
@@ -564,6 +575,9 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                 Event::ProfilePatch(kind, data) => self.profile_patch(&kind, &data),
                 Event::Connected(user, guilds, dms) => {
                     self.connecting = false;
+                    if let Some(token) = self.pending_save.take() { crate::login::saved::save(&token); }
+                    self.auto_login = false;
+                    self.login_ui = Default::default();
                     self.user = Some(user);
                     self.guilds = guilds;
 
@@ -704,6 +718,12 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                 Event::Gateway(status) => self.status = status,
                 Event::Error(error) => {
                     self.picker.pending = false;
+                    if self.connecting {
+                        self.pending_save = None;
+                        // A saved session Discord no longer accepts is forgotten so the sign-in screen shows.
+                        if self.auto_login && error.contains("rejected the token") { crate::login::saved::delete(); }
+                        self.auto_login = false;
+                    }
                     self.connecting = false;
                     self.error = Some(error);
                 }
@@ -792,7 +812,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             .frame(egui::Frame::NONE.fill(preferences_bg(&self.prefs)))
             .show(ctx, |ui| {
                 let width = ui.available_width();
-                ui.add_space((ui.available_height() - 530.0).max(30.0) / 2.0);
+                ui.add_space((ui.available_height() - 660.0).max(16.0) / 2.0);
                 ui.horizontal(|ui| {
                     ui.add_space(((width - 510.0) / 2.0).max(20.0));
                     ui.vertical(|ui| {
@@ -820,62 +840,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                             .inner_margin(22)
                             .show(ui, |ui| {
                                 ui.set_width(446.0);
-                                ui.label(RichText::new("Connect your account").size(20.0).strong());
-                                ui.add_space(8.0);
-                                ui.label(
-                                    RichText::new("Personal account token")
-                                        .color(MUTED)
-                                        .size(13.0),
-                                );
-                                ui.add_enabled(
-                                    !self.connecting,
-                                    egui::TextEdit::singleline(&mut self.token)
-                                        .password(true)
-                                        .hint_text("Paste your own token")
-                                        .desired_width(f32::INFINITY),
-                                );
-                                ui.label(
-                                    RichText::new(
-                                        "Session only. Your token is never saved to disk.",
-                                    )
-                                    .size(12.0)
-                                    .color(MUTED),
-                                );
-                                ui.add_space(9.0);
-                                ui.label(
-                                    RichText::new(
-                                        "Unofficial account access is not supported by Discord.",
-                                    )
-                                    .size(12.0)
-                                    .color(MUTED),
-                                );
-                                ui.add_space(8.0);
-                                if ui
-                                    .add_enabled(
-                                        !self.connecting && !self.token.is_empty(),
-                                        primary(if self.connecting {
-                                            "Connecting…"
-                                        } else {
-                                            "Connect to Discord"
-                                        }),
-                                    )
-                                    .clicked()
-                                {
-                                    match normalize_token(&self.token) {
-                                        Ok(token) => {
-                                            self.backend = Some(backend::start(token, ctx.clone()));
-                                            self.token.zeroize();
-                                            self.connecting = true;
-                                            self.error = None;
-                                            self.status = "Connecting…".into();
-                                        }
-                                        Err(error) => self.error = Some(error),
-                                    }
-                                }
-                                if let Some(error) = &self.error {
-                                    ui.add_space(7.0);
-                                    ui.colored_label(Color32::from_rgb(255, 160, 151), error);
-                                }
+                                self.login_card(ui, ctx);
                             });
                         ui.add_space(13.0);
                         if ui.button("Explore offline preview").clicked() {
@@ -1307,9 +1272,12 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                             if ui.button("Notification Settings").clicked(){self.open_server_settings();self.server_page="Notifications".into();self.load_server_page();ui.close();}
                         });
                     }else{
-                        // The Direct Messages title doubles as the conversation search, like Discord's top bar.
+                        // Conversation search at the top, like Discord. The placeholder clears while focused and
+                        // returns when focus leaves an empty box.
+                        let id=egui::Id::new("dm-conversation-search");
+                        let focused=ui.memory(|m|m.has_focus(id));
                         ui.scope(|ui|{ui.visuals_mut().extreme_bg_color=CARD;
-                            ui.add(egui::TextEdit::singleline(&mut self.channel_filter).hint_text(RichText::new(name).size(15.)).horizontal_align(egui::Align::Center).desired_width(f32::INFINITY).margin(Vec2::new(9.0,7.0))).on_hover_text("Find a conversation");
+                            ui.add(egui::TextEdit::singleline(&mut self.channel_filter).id(id).hint_text(RichText::new(if focused{""}else{"Find A Conversation"}).size(15.)).horizontal_align(egui::Align::Center).desired_width(f32::INFINITY).margin(Vec2::new(9.0,7.0)));
                         });
                     }
                     ui.add_space(if self.guild.is_some(){8.0}else{4.0});
@@ -2315,8 +2283,8 @@ mod interaction_tests {
         assert!(category.visual_bounding_rect().top()-header.bottom()<60.0,"channel list must move up");
         app.guild=None;app.channels=app.dms.clone();
         let output=ctx.run(input(vec![]),|ctx|{app.left_column(ctx);});let texts:Vec<_>=output.shapes.iter().filter_map(|s|if let egui::Shape::Text(t)=&s.shape{Some(t.galley.job.text.clone())}else{None}).collect();
-        // The centered search bar title plus the list heading; the old separate search box is gone.
-        assert_eq!(texts.iter().filter(|t|t.as_str()=="Direct messages").count(),2,"{texts:?}");assert!(!texts.iter().any(|t|t=="Find a conversation"));
+        // The search bar sits at the top and the old separate box under Quests is gone.
+        assert_eq!(texts.iter().filter(|t|t.as_str()=="Find A Conversation").count(),1,"{texts:?}");assert!(!texts.iter().any(|t|t=="Find a conversation"));
     }
     #[test]fn member_panel_has_no_count_or_search_and_header_search_names_the_server(){
         let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);app.show_members=true;app.prefs.member_count=true;

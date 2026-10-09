@@ -361,6 +361,9 @@ struct Texture {
     playback: Playback,
     /// Last egui pass that asked this texture to play.
     played: u64,
+    /// One more than the last egui pass that drew this texture (0 = not drawn); on-screen
+    /// textures are never evicted.
+    seen: u64,
 }
 pub struct Images {
     animate:bool,
@@ -475,15 +478,34 @@ impl Images {
     pub fn sampled(&self) -> usize {
         self.textures.values().filter(|v| v.data.sampled).count()
     }
-    fn insert(&mut self, ctx: &egui::Context, key: String, data: Decoded) {
+    fn insert(&mut self, ctx: &egui::Context, key: String, mut data: Decoded) {
         if data.bytes > PIXEL_BUDGET {
             return;
         }
         self.textures.remove(&key);
+        let pass = ctx.cumulative_pass_nr();
         // Keep source cadence. Evict least-recently used assets instead of thinning live animations.
         // Server icons and avatars go last: they are small and on screen almost everywhere, so
         // large artwork (Shop, Quests, banners) must not push them out and force reloads.
+        // Anything drawn this pass or the last one is on screen: evicting it would only reload it
+        // next frame and evict something else, so the screen would flicker and refresh forever.
         while self.textures.len() >= TEXTURE_LIMIT || self.bytes() + data.bytes > PIXEL_BUDGET {
+            let off_screen = self
+                .textures
+                .iter()
+                .filter(|(_, v)| v.seen == 0 || v.seen < pass)
+                .min_by_key(|(k, v)| (is_icon(k), v.used))
+                .map(|(k, _)| k.clone());
+            if let Some(key) = off_screen {
+                self.textures.remove(&key);
+                continue;
+            }
+            // Everything cached is visible: keep this animation as a still image instead.
+            if data.frames.len() > 1 {
+                data.frames.truncate(1);
+                data.bytes = data.frames[0].image.pixels.len() * 4;
+                continue;
+            }
             let Some(key) = self
                 .textures
                 .iter()
@@ -508,6 +530,7 @@ impl Images {
                 data,
                 playback: Playback::default(),
                 played: 0,
+                seen: pass + 1,
             },
         );
     }
@@ -535,7 +558,9 @@ impl Images {
             } else {
                 Decoded::still(demo_image(&key, 0.0, 128))
             };
-            self.insert(ctx, key, data);
+            // The workload streams through (scrolled past), so nothing it inserts stays on screen.
+            self.insert(ctx, key.clone(), data);
+            if let Some(texture) = self.textures.get_mut(&key) { texture.seen = 0; }
         }
     }
     pub fn poll(&mut self, ctx: &egui::Context) {
@@ -584,6 +609,7 @@ impl Images {
         self.clock = self.clock.wrapping_add(1);
         if let Some(texture) = self.textures.get_mut(key) {
             texture.used = self.clock;
+            texture.seen = ctx.cumulative_pass_nr() + 1;
             // An unfocused window holds every animation, GIFs included, on its current frame.
             if self.animate && texture.data.frames.len() > 1 && ctx.input(|i|i.focused) {
                 // One texture can be drawn in several places. It plays if any of them
