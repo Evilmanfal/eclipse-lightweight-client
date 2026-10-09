@@ -1,6 +1,13 @@
 use crate::model::Message;
 use std::collections::VecDeque;
 #[derive(Clone)] pub struct Logged { pub message: Message, pub deleted: bool }
+/// Replies start a new group so their context stays beside their author.
+pub fn grouped(previous: &Message, current: &Message) -> bool {
+    !current.author.id.is_empty()
+        && previous.channel_id == current.channel_id
+        && previous.author.id == current.author.id
+        && current.referenced_message.is_none()
+}
 // Deleted snapshots rejoin the current channel's chronology, without duplicating live IDs.
 pub fn messages(live: &VecDeque<Message>, logs: &VecDeque<Logged>, channel: &str) -> Vec<Message> {
     let mut result: Vec<_>=live.iter().filter(|m|m.channel_id==channel).cloned().collect();
@@ -17,6 +24,15 @@ pub fn is_edit(message:&Message,update:&serde_json::Value)->bool {
 #[cfg(test)] mod tests {
     use super::*;
     fn message(id:&str,channel:&str,time:&str)->Message {Message{id:id.into(),channel_id:channel.into(),timestamp:time.into(),..Default::default()}}
+    #[test] fn groups_same_author_but_keeps_replies_and_channels_separate() {
+        let mut first=message("1","a","01");first.author.id="user".into();
+        let mut second=first.clone();second.id="2".into();
+        assert!(grouped(&first,&second));
+        second.author.id="another".into();assert!(!grouped(&first,&second));
+        second.author.id=first.author.id.clone();second.channel_id="b".into();assert!(!grouped(&first,&second));
+        second.channel_id=first.channel_id.clone();second.referenced_message=Some(Box::new(first.clone()));assert!(!grouped(&first,&second));
+        second.referenced_message=None;first.author.id.clear();second.author.id.clear();assert!(!grouped(&first,&second));
+    }
     #[test] fn delete_snapshots_survive_channel_reload_without_duplicates_or_cross_channel_leaks() {
         let live=VecDeque::from([message("20","a","02"),message("30","a","03")]);
         let logs=VecDeque::from([Logged{message:message("10","a","01"),deleted:true},Logged{message:message("20","a","02"),deleted:false},Logged{message:message("30","a","03"),deleted:true},Logged{message:message("40","b","04"),deleted:true}]);

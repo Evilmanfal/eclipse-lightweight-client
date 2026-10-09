@@ -22,6 +22,7 @@ const MUTED: Color32 = Color32::from_gray(170);
 const TEXT: Color32 = Color32::from_gray(237);
 const LOG_RED: Color32 = Color32::from_rgb(242, 124, 133);
 const BORDER: Color32 = Color32::from_gray(46);
+const DM_PAGE_SIZE: usize = 25;
 #[path="panels.rs"] mod panels;
 #[derive(Clone,Copy,PartialEq)] enum Home { Chat, Friends, Nitro, Shop, Quests }
 use crate::timeline::Logged;
@@ -35,6 +36,7 @@ pub struct Eclipse {
     user: Option<User>,
     guilds: Vec<Guild>,
     dms: Vec<Channel>,
+    dm_visible: usize,
     channels: Vec<Channel>,
     guild: Option<String>,
     channel: Option<Channel>,
@@ -189,6 +191,7 @@ impl Eclipse {
             user: None,
             guilds: vec![],
             dms: vec![],
+            dm_visible: DM_PAGE_SIZE,
             channels: vec![],
             guild: None,
             channel: None,
@@ -582,6 +585,8 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     self.guilds = guilds;
 
                     self.dms = dms;
+                    crate::navigation::sort_dms(&mut self.dms);
+                    self.dm_visible = DM_PAGE_SIZE;
                     for (channel,message) in self.dms.iter().filter_map(|c|c.last_message_id.as_ref().map(|id|(c.id.clone(),id.clone()))).collect::<Vec<_>>(){self.note_latest(channel,message);}
                     self.error = None;
                     if self.guild.is_none() {
@@ -733,9 +738,12 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     }
                 }
                 Event::Dm(channel) => {
-                    if !self.dms.iter().any(|c| c.id == channel.id) {
+                    if let Some(existing) = self.dms.iter_mut().find(|c| c.id == channel.id) {
+                        *existing = channel.clone();
+                    } else {
                         self.dms.insert(0, channel.clone());
                     }
+                    crate::navigation::sort_dms(&mut self.dms);
                     self.guild = None;
                     self.channels = self.dms.clone();
                     self.select_channel(channel);
@@ -752,6 +760,15 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
     fn receive_message(&mut self, message: Message, count_unread: bool) {
         self.navigation.receive(message.clone());
         self.note_latest(message.channel_id.clone(),message.id.clone());
+        if let Some(dm) = self.dms.iter_mut().find(|c| c.id == message.channel_id) {
+            let newest = message.id.parse::<u64>().unwrap_or(0);
+            let previous = dm.last_message_id.as_deref().and_then(|id| id.parse::<u64>().ok()).unwrap_or(0);
+            if newest > previous {
+                dm.last_message_id = Some(message.id.clone());
+                crate::navigation::sort_dms(&mut self.dms);
+                if self.guild.is_none() { self.channels = self.dms.clone(); }
+            }
+        }
         if self
             .channel
             .as_ref()
@@ -1247,6 +1264,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                 let call_height=if self.calls.channel().is_some(){80.0}else{0.0};
                 let channel_height = (ui.available_height()-spotify_height-call_height).max(230.0);
                 self.surface().inner_margin(self.pad(10)).show(ui, |ui| {
+                    let mut reset_dm_scroll = false;
                     ui.set_min_height(channel_height - 20.0);
                     ui.set_min_width(ui.available_width());
                     let name = self
@@ -1277,7 +1295,10 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         let id=egui::Id::new("dm-conversation-search");
                         let focused=ui.memory(|m|m.has_focus(id));
                         ui.scope(|ui|{ui.visuals_mut().extreme_bg_color=CARD;
-                            ui.add(egui::TextEdit::singleline(&mut self.channel_filter).id(id).hint_text(RichText::new(if focused{""}else{"Find A Conversation"}).size(15.)).horizontal_align(egui::Align::Center).desired_width(f32::INFINITY).margin(Vec2::new(9.0,7.0)));
+                            if ui.add(egui::TextEdit::singleline(&mut self.channel_filter).id(id).hint_text(RichText::new(if focused{""}else{"Find A Conversation"}).size(15.)).horizontal_align(egui::Align::Center).desired_width(f32::INFINITY).margin(Vec2::new(9.0,7.0))).changed() {
+                                self.dm_visible = DM_PAGE_SIZE;
+                                reset_dm_scroll = true;
+                            }
                         });
                     }
                     ui.add_space(if self.guild.is_some(){8.0}else{4.0});
@@ -1294,26 +1315,22 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                             if plus.clicked(){self.open_dm_picker(plus.rect);}
                         });ui.add_space(5.0);
                     }
-                    egui::ScrollArea::vertical()
-                        .id_salt("channels")
-                        .max_height((channel_height-if self.guild.is_some(){85.0}else{229.0}).max(70.0))
-                        .show(ui, |ui| {
+                    let filter = self.channel_filter.to_lowercase();
+                    let matching: Vec<_> = self.channels.iter().filter(|c| {
+                        c.guild_id.as_deref().is_none_or(|id| Some(id) == self.guild.as_deref())
+                            && c.label().to_lowercase().contains(&filter)
+                    }).collect();
+                    let limit = if self.guild.is_none() { self.dm_visible } else { matching.len() };
+                    let has_more = self.guild.is_none() && matching.len() > limit;
+                    let channels: Vec<_> = matching.into_iter().take(limit).cloned().collect();
+                    let mut scroll = egui::ScrollArea::vertical()
+                        .id_salt(("channels", &self.guild))
+                        .max_height((channel_height-if self.guild.is_some(){85.0}else{229.0}).max(70.0));
+                    if reset_dm_scroll { scroll = scroll.vertical_scroll_offset(0.0); }
+                    scroll.show_viewport(ui, |ui, viewport| {
                             if self.guild.is_some(){ui.spacing_mut().item_spacing.y=3.0;}
-                            for channel in self.channels.clone() {
-                                if channel
-                                    .guild_id
-                                    .as_deref()
-                                    .is_some_and(|id| Some(id) != self.guild.as_deref())
-                                {
-                                    continue;
-                                }
+                            for channel in channels {
                                 let label = channel.label();
-                                if !label
-                                    .to_lowercase()
-                                    .contains(&self.channel_filter.to_lowercase())
-                                {
-                                    continue;
-                                }
                                 if channel.kind == 4 {
                                     ui.add_space(10.0);
                                     ui.label(RichText::new(label).size(12.0).color(MUTED).strong());
@@ -1375,6 +1392,10 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                                         );
                                     }
                                 }
+                            }
+                            if has_more && viewport.min.y > 0.0 && viewport.max.y >= ui.min_rect().height() - 60.0 {
+                                self.dm_visible = self.dm_visible.saturating_add(DM_PAGE_SIZE);
+                                ui.ctx().request_repaint();
                             }
                             if self.channels.is_empty() {
                                 ui.label(
@@ -1537,6 +1558,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     let file_height=if self.files.contains_key(&channel.id){32.0}else{0.0};
                     let scroll_height=(ui.available_height()-110.0-file_height).max(60.0);
                     egui::ScrollArea::vertical().id_salt(("history",&channel.id)).stick_to_bottom(true).max_height(scroll_height).auto_shrink([false,false]).show(ui,|ui| {
+                        ui.spacing_mut().item_spacing.y = if self.compact { 0.0 } else { 2.0 };
                         if self.has_older&&!self.preview{
                             let enabled=self.messages.len()<HISTORY_LIMIT;
                             if ui.add_enabled(enabled,egui::Button::new(if enabled{"Load older messages"}else{"200-message memory limit reached"})).clicked(){self.send_command(Command::History(channel.id.clone(),self.messages.front().map(|m|m.id.clone())));}
@@ -1544,11 +1566,16 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         if self.messages.is_empty(){ui.add_space(30.0);ui.heading(if self.loaded{"The conversation starts here."}else{"Loading messages…"});}
                         ui.add_space(8.0);
                         let search=self.search.to_lowercase();
-                        let messages:Vec<_>=crate::timeline::messages(&self.messages,&self.logs,&channel.id).into_iter().filter(|m|search.is_empty()||m.content.to_lowercase().contains(&search)||m.author.name().to_lowercase().contains(&search)).collect();
+                        let messages=crate::timeline::messages(&self.messages,&self.logs,&channel.id);
                         let now=ui.input(|i|i.time);
-                        for message in messages{
+                        let mut previous_visible = None;
+                        for (index, message) in messages.iter().enumerate(){
+                            if !search.is_empty() && !message.content.to_lowercase().contains(&search) && !message.author.name().to_lowercase().contains(&search) { continue; }
+                            let grouped = index > 0 && previous_visible == Some(index - 1) && crate::timeline::grouped(&messages[index - 1], message);
+                            if !grouped && previous_visible.is_some() { ui.add_space(if self.compact { 3.0 } else { 10.0 }); }
+                            previous_visible = Some(index);
                             let bg=ui.painter().add(egui::Shape::Noop);
-                            let rect=ui.scope(|ui|self.message_ui(ui,&message)).response.rect;
+                            let rect=ui.scope(|ui|if grouped { self.message_ui_grouped(ui,message,true); } else { self.message_ui(ui,message); }).response.rect;
                             if self.jump_to.as_ref().is_some_and(|(id,_)|*id==message.id){
                                 ui.scroll_to_rect(rect,Some(egui::Align::Center));self.highlight=Some((message.id.clone(),now));
                                 self.jump_to=self.jump_to.take().and_then(|(id,frames)|(frames>0).then(||(id,frames-1)));
@@ -1557,7 +1584,6 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                                 let fade=1.0-((now-start)/2.5) as f32;
                                 if fade>0.0{let [r,g,b,_]=self.accent().to_array();ui.painter().set(bg,egui::Shape::rect_filled(rect.expand2(Vec2::new(6.0,3.0)),6,Color32::from_rgba_unmultiplied(r,g,b,(fade*55.0) as u8)));ui.ctx().request_repaint();}
                             }
-                            ui.add_space(if self.compact{0.0}else{6.0});
                         }
                         ui.add_space(12.0);
                     });
@@ -1567,6 +1593,9 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
     }
 
     fn message_ui(&mut self, ui: &mut egui::Ui, message: &Message) {
+        self.message_ui_grouped(ui, message, false);
+    }
+    fn message_ui_grouped(&mut self, ui: &mut egui::Ui, message: &Message, grouped: bool) {
         let deleted=self.logs.iter().any(|e|e.deleted&&e.message.id==message.id&&e.message.channel_id==message.channel_id);
         let versions:Vec<_>=self.logs.iter().filter(|e|!e.deleted&&e.message.id==message.id&&e.message.channel_id==message.channel_id).map(|e|e.message.content.clone()).collect();
         let logged=deleted||!versions.is_empty();
@@ -1577,7 +1606,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
         let response = ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()),|ui| {egui::Frame::NONE
             .fill(Color32::TRANSPARENT)
             .corner_radius(19)
-            .inner_margin(egui::Margin::symmetric(8, if self.compact { 2 } else { 4 }))
+            .inner_margin(egui::Margin::symmetric(8, if grouped { 0 } else if self.compact { 2 } else { 4 }))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 if let Some(reply) = &message.referenced_message {
@@ -1607,22 +1636,27 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     ui.add_space(if self.compact { 0.0 } else { 2.0 });
                 }
                 ui.horizontal_top(|ui| {
-                    self.avatar_with_status(
-                        ui,
-                        &message.author,
-                        message.member.as_ref().and_then(|m| m.avatar.as_deref()),
-                        40.0,
-                        false,
-                    );
+                    if grouped {
+                        let (_, response) = ui.allocate_exact_size(Vec2::new(40.0, 16.0), egui::Sense::hover());
+                        response.on_hover_text(self.message_clock.label(&message.timestamp));
+                    } else {
+                        self.avatar_with_status(
+                            ui,
+                            &message.author,
+                            message.member.as_ref().and_then(|m| m.avatar.as_deref()),
+                            40.0,
+                            false,
+                        );
+                    }
                     ui.add_space(5.0);
                     // Plain chat text keeps server chats, group DMs and DMs visually consistent.
                     ui.vertical(|ui| {
                     egui::Frame::NONE
-                        .inner_margin(egui::Margin::symmetric(0, if self.compact { 0 } else { 3 }))
+                        .inner_margin(egui::Margin::symmetric(0, if grouped || self.compact { 0 } else { 3 }))
                         .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
                         if self.compact { ui.spacing_mut().item_spacing.y = 0.0; }
-                        ui.horizontal_wrapped(|ui| {
+                        if !grouped { ui.horizontal_wrapped(|ui| {
                             let author_response=crate::identity::name(ui,&message.author,message.author.name(),15.,if self.prefs.role_colors{self.server.color(&message.author.id).unwrap_or_else(||name_color(message.author.name()))}else{TEXT});
                             self.guild_tag_chip(ui,&message.author);
                             author_response.context_menu(|ui|self.user_menu(ui,&message.author));if author_response.clicked(){self.toggle_profile_at(&message.author,author_response.rect);}
@@ -1634,14 +1668,17 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                             );
                             if deleted {ui.label(RichText::new("Deleted").size(10.).color(LOG_RED));}
                             else if message.edited_timestamp.is_some() || !versions.is_empty() {ui.label(RichText::new("Edited").size(10.).color(if logged{LOG_RED}else{MUTED}));}
-                        });
+                        }); }
+                        else if deleted || message.edited_timestamp.is_some() || !versions.is_empty() {
+                            ui.label(RichText::new(if deleted { "Deleted" } else { "Edited" }).size(10.).color(if logged { LOG_RED } else { MUTED }));
+                        }
                         if !message.content.is_empty() {
                             let display=self.prefs.display(&crate::message_media::visible_content(message,self.prefs.images));
                             ui.scope(|ui|{if logged{ui.visuals_mut().override_text_color=Some(LOG_RED);}
                                 for response in crate::message_media::body(ui, &mut self.images, &display){if deleted{response.context_menu(|ui|{if ui.button("Copy deleted text").clicked(){ui.ctx().copy_text(message.content.clone());ui.close();}});}else{response.context_menu(|ui|self.message_menu(ui,message));self.message_click(&response,message);}}
                             });
                             if !versions.is_empty(){egui::CollapsingHeader::new(RichText::new(format!("Previous edit{}",if versions.len()==1{""}else{"s"})).size(11.).color(LOG_RED)).id_salt(("edit-history",&message.id)).default_open(true).show(ui,|ui|{ui.visuals_mut().override_text_color=Some(LOG_RED);for text in versions.iter().rev().take(5){crate::message_media::body(ui,&mut self.images,text);}if versions.len()>5{ui.weak(format!("{} earlier edits retained this session",versions.len()-5));}});}
-                            if self.prefs.show_usernames{ui.weak(format!("@{}",message.author.username));}
+                            if self.prefs.show_usernames && !grouped {ui.weak(format!("@{}",message.author.username));}
                             if self.prefs.images&&message.embeds.is_empty() {
                                 for url in crate::message_media::direct_images(&message.content) {
                                     crate::message_media::picture(ui,&mut self.images,&url,None,None,true);
@@ -1857,11 +1894,6 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                 });
             });
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("Enter to send  ·  Shift+Enter for a new line")
-                    .size(10.0)
-                    .color(MUTED),
-            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     RichText::new(if self.prefs.character_count{format!("{} / {}",self.drafts.get(&channel.id).map(|d|d.chars().count()).unwrap_or(0),if self.user.as_ref().is_some_and(|u|u.premium_type==2){4000}else{2000})}else{"Right-click a message for actions".into()})
@@ -2026,6 +2058,7 @@ impl eframe::App for Eclipse {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_events();
         crate::zoom::handle(ctx,&mut self.prefs.zoom);
+        crate::zoom::accelerate_scroll(ctx);
         self.preferences_tick(ctx);
         self.calls.poll();
         if !self.calls.active(){self.voice_revealed=None;}
@@ -2274,6 +2307,52 @@ fn preferences_bg(p:&crate::preferences::Preferences)->Color32{crate::preference
 #[cfg(test)]
 mod interaction_tests {
     use super::*;
+    #[test]fn dm_activity_moves_conversations_up_without_regressing_on_older_messages(){
+        let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);
+        app.dms=vec![Channel{id:"newest".into(),last_message_id:Some("100".into()),kind:1,..Default::default()},Channel{id:"older".into(),last_message_id:Some("9".into()),kind:1,..Default::default()}];
+        app.guild=None;app.channels=app.dms.clone();
+        app.receive_message(Message{id:"101".into(),channel_id:"older".into(),..Default::default()},true);
+        assert_eq!(app.dms[0].id,"older");assert_eq!(app.channels[0].id,"older");assert_eq!(app.dms[0].last_message_id.as_deref(),Some("101"));
+        app.receive_message(Message{id:"8".into(),channel_id:"older".into(),..Default::default()},true);
+        assert_eq!(app.dms[0].last_message_id.as_deref(),Some("101"));
+        app.guild=Some("server".into());app.channels=vec![Channel{id:"server-channel".into(),..Default::default()}];
+        app.receive_message(Message{id:"102".into(),channel_id:"newest".into(),..Default::default()},false);
+        assert_eq!(app.dms[0].id,"newest");assert_eq!(app.channels[0].id,"server-channel");
+    }
+    #[test]fn dm_list_starts_with_25_and_reveals_more_only_when_scrolled_near_the_end(){
+        let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);
+        app.guild=None;app.channel=None;
+        app.dms=(0..60).map(|i|Channel{id:format!("dm-{i}"),name:Some(format!("Conversation {i:02}")),kind:1,last_message_id:Some((100+i).to_string()),..Default::default()}).collect();
+        crate::navigation::sort_dms(&mut app.dms);app.channels=app.dms.clone();
+        for _ in 0..3{let _=ctx.run(input(vec![]),|ctx|app.left_column(ctx));}
+        assert_eq!(app.dm_visible,25);
+        let point=egui::pos2(200.,430.);
+        for _ in 0..40{
+            let _=ctx.run(input(vec![egui::Event::PointerMoved(point),egui::Event::MouseWheel{unit:egui::MouseWheelUnit::Line,delta:Vec2::new(0.,-12.),modifiers:Default::default()}]),|ctx|app.left_column(ctx));
+            if app.dm_visible>25{break;}
+        }
+        assert_eq!(app.dm_visible,50,"scrolling to the end reveals the next batch");
+        // Searching filters all conversations before applying the first-page limit.
+        ctx.memory_mut(|m|m.request_focus(egui::Id::new("dm-conversation-search")));
+        let output=ctx.run(input(vec![egui::Event::Text("Conversation 00".into())]),|ctx|app.left_column(ctx));
+        assert_eq!(app.dm_visible,25);
+        assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t)if t.galley.job.text=="Conversation 00")));
+    }
+    #[test]fn consecutive_messages_share_author_heading_and_keep_all_bodies_aligned(){
+        let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);let channel=app.channel.clone().unwrap();
+        let message=|id:&str,author:&str,content:&str|Message{id:id.into(),channel_id:channel.id.clone(),author:User{id:author.into(),username:author.into(),..Default::default()},content:content.into(),timestamp:"2026-10-09T12:00:00Z".into(),..Default::default()};
+        app.messages=VecDeque::from([message("1","Repeated author","First in group"),message("2","Repeated author","Second in group"),message("3","Other author","Other message"),message("4","Repeated author","New group")]);
+        let mut output=None;for _ in 0..3{output=Some(ctx.run(input(vec![]),|ctx|app.conversation(ctx)));}
+        let output=output.unwrap();let texts:Vec<_>=output.shapes.iter().filter_map(|s|if let egui::Shape::Text(t)=&s.shape{Some(t)}else{None}).collect();
+        assert_eq!(texts.iter().filter(|t|t.galley.job.text=="Repeated author").count(),2);
+        assert_eq!(texts.iter().filter(|t|t.galley.job.text=="Other author").count(),1);
+        // Glyph bearings differ (e.g. F versus S); compare layout origins, not ink bounds.
+        let body=|text:&str|texts.iter().find(|t|t.galley.job.text==text).expect("message body").pos;
+        let first=body("First in group");let second=body("Second in group");
+        assert!((first.x-second.x).abs()<1.0,"message origins differ: {first:?}, {second:?}");
+        body("Other message");body("New group");
+        assert!(!texts.iter().any(|t|t.galley.job.text.contains("Enter to send")));
+    }
     #[test]fn server_channels_start_below_the_header_without_search_or_redundant_label(){
         let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);let mut output=None;
         for _ in 0..2{output=Some(ctx.run(input(vec![]),|ctx|{app.left_column(ctx);}));}
@@ -2309,10 +2388,11 @@ mod interaction_tests {
         app.toggle_profile_at(&user,anchor);assert!(app.profile.is_some());
     }
     #[test]fn shift_message_controls_edit_and_request_delete_only_when_permitted(){
+        for grouped in [false,true] {
         let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);
         let mut message=app.messages.front().unwrap().clone();message.author=app.user.clone().unwrap();
         let id=egui::Id::new(("message-actions",&message.channel_id,&message.id));
-        let frame=|app:&mut Eclipse,message:&Message,shift,events|{let mut raw=input(events);raw.modifiers.shift=shift;ctx.run(raw,|ctx|{egui::CentralPanel::default().show(ctx,|ui|app.message_ui(ui,message));})};
+        let frame=|app:&mut Eclipse,message:&Message,shift,events|{let mut raw=input(events);raw.modifiers.shift=shift;ctx.run(raw,|ctx|{egui::CentralPanel::default().show(ctx,|ui|app.message_ui_grouped(ui,message,grouped));})};
         for _ in 0..3{frame(&mut app,&message,true,vec![egui::Event::PointerMoved(egui::pos2(700.0,24.0))]);}
         let edit=ctx.read_response(id.with("edit")).expect("Shift edit control").rect.center();
         for pressed in [true,false]{frame(&mut app,&message,true,vec![egui::Event::PointerMoved(edit),egui::Event::PointerButton{pos:edit,button:egui::PointerButton::Primary,pressed,modifiers:egui::Modifiers::SHIFT}]);}
@@ -2323,6 +2403,7 @@ mod interaction_tests {
         for _ in 0..2{frame(&mut app,&message,false,vec![]);}assert!(ctx.read_response(id.with("edit")).is_none());
         message.author.id="someone-else".into();app.guild=None;
         frame(&mut app,&message,true,vec![egui::Event::PointerMoved(egui::pos2(700.0,24.0))]);assert!(ctx.read_response(id.with("edit")).is_none()&&ctx.read_response(id.with("delete")).is_none());
+        }
     }
     fn composer_frame(ctx:&egui::Context,app:&mut Eclipse,channel:&Channel,events:Vec<egui::Event>)->egui::FullOutput{ctx.run(input(events),|ctx|{egui::CentralPanel::default().show(ctx,|ui|{app.composer(ui,ctx,channel);});})}
     #[test]fn composer_enter_sends_shift_enter_inserts_newline_and_unfocused_enter_does_nothing(){
