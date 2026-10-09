@@ -2,7 +2,7 @@ use super::*;
 impl Eclipse {
     pub(in crate::ui) fn extra_dialogs(&mut self,ctx:&egui::Context){
         self.settings_window(ctx);self.server_settings_window(ctx);
-        self.profile_popout(ctx);self.full_profile_window(ctx);self.account_menu(ctx);crate::message_media::viewer(ctx,&mut self.images);
+        self.profile_popout(ctx);self.full_profile_window(ctx);self.account_menu(ctx);crate::message_media::viewer(ctx,&mut self.images);crate::message_media::save_status(ctx);
         if let Some((title,command))=self.confirm.take(){let mut open=true;let mut decision=None;egui::Window::new("Confirm action").id(egui::Id::new("confirm-action")).open(&mut open).collapsible(false).resizable(false).show(ctx,|ui|{ui.label(&title);ui.horizontal(|ui|{if ui.button(RichText::new("Confirm").color(Color32::LIGHT_RED)).clicked(){decision=Some(true);}if ui.button("Cancel").clicked(){decision=Some(false);}});});match decision{Some(true)=>{if self.preview{self.error=Some("Offline preview: no action sent.".into());}else{self.send_command(command);}},Some(false)=>{},None if open=>self.confirm=Some((title,command)),None=>{}}}
     }
     pub(in crate::ui) fn message_menu(&mut self,ui:&mut egui::Ui,message:&Message){

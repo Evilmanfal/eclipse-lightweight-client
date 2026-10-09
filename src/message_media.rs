@@ -175,7 +175,48 @@ pub fn picture(
     }
     if response.clicked(){open_viewer(ui.ctx(),url);}
     let response=response.on_hover_cursor(egui::CursorIcon::PointingHand);
-    response.context_menu(|ui|{if ui.button("Open image").clicked(){ui.ctx().open_url(egui::OpenUrl::new_tab(url));ui.close();}if ui.button("Copy image link").clicked(){ui.ctx().copy_text(url.to_owned());ui.close();}});
+    response.context_menu(|ui|{if ui.button("Open image").clicked(){ui.ctx().open_url(egui::OpenUrl::new_tab(url));ui.close();}if ui.button("Copy image link").clicked(){ui.ctx().copy_text(url.to_owned());ui.close();}if ui.button("Save image…").clicked(){save_image(ui.ctx(),url);ui.close();}});
+}
+/// A file name for a picture's address: its last path segment, made safe for Windows.
+fn file_name(url:&str)->String{
+    let path=url.split(['?','#']).next().unwrap_or("");
+    let name:String=path.rsplit('/').next().unwrap_or("").chars().map(|c|if c.is_control()||r#"<>:"/\|?*"#.contains(c){'_'}else{c}).take(120).collect();
+    let name=name.trim_matches(['.',' ']).to_owned();
+    if name.is_empty(){"image.png".into()}else if name.contains('.'){name}else{format!("{name}.png")}
+}
+static SAVE_STATUS:std::sync::Mutex<Option<(String,std::time::Instant)>>=std::sync::Mutex::new(None);
+fn report(ctx:&egui::Context,text:String){if let Ok(mut status)=SAVE_STATUS.lock(){*status=Some((text,std::time::Instant::now()));}ctx.request_repaint();}
+/// Asks where to save a picture, then downloads it there in the background.
+pub fn save_image(ctx:&egui::Context,url:&str){
+    if !crate::assets::public_url(url){return;}
+    let (ctx,url)=(ctx.clone(),url.to_owned());
+    std::thread::spawn(move||{
+        let name=file_name(&url);
+        let extension=name.rsplit('.').next().unwrap_or("png").to_ascii_lowercase();
+        let Some(path)=rfd::FileDialog::new().set_file_name(&name).add_filter("Image",&[extension.as_str()]).save_file() else{return};
+        report(&ctx,"Saving image…".into());
+        let result=(||->Result<(),String>{
+            use std::io::Read;
+            let client=reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(60)).build().map_err(|_|"Could not start the download.".to_owned())?;
+            let response=client.get(&url).send().map_err(|_|"Could not reach the image.".to_owned())?;
+            if !response.status().is_success(){return Err(format!("The image could not be downloaded ({}).",response.status().as_u16()));}
+            // Pictures over 100 MB are refused rather than filling memory.
+            let mut bytes=vec![];response.take(100*1024*1024+1).read_to_end(&mut bytes).map_err(|_|"The download was interrupted.".to_owned())?;
+            if bytes.len()>100*1024*1024{return Err("The image is larger than 100 MB.".into());}
+            std::fs::write(&path,bytes).map_err(|_|"Could not write the file there.".to_owned())
+        })();
+        report(&ctx,match result{Ok(())=>format!("Saved {}",path.file_name().map(|n|n.to_string_lossy().into_owned()).unwrap_or_default()),Err(error)=>error});
+    });
+}
+/// A short note at the bottom of the window after saving a picture.
+pub fn save_status(ctx:&egui::Context){
+    let Some((text,at))=SAVE_STATUS.lock().ok().and_then(|s|s.clone()) else{return};
+    let age=at.elapsed().as_secs_f32();
+    if age>3.5&&text!="Saving image…"{if let Ok(mut status)=SAVE_STATUS.lock(){*status=None;}return;}
+    egui::Area::new(egui::Id::new("image-save-status")).order(egui::Order::Tooltip).anchor(egui::Align2::CENTER_BOTTOM,Vec2::new(0.0,-24.0)).interactable(false).show(ctx,|ui|{
+        egui::Frame::NONE.fill(egui::Color32::from_gray(32)).stroke(egui::Stroke::new(1.0_f32,egui::Color32::from_gray(60))).corner_radius(8).inner_margin(egui::Margin::symmetric(14,8)).show(ui,|ui|{ui.label(egui::RichText::new(&text).color(egui::Color32::WHITE));});
+    });
+    ctx.request_repaint_after(std::time::Duration::from_millis(250));
 }
 fn viewer_id()->egui::Id{egui::Id::new("eclipse-image-viewer")}
 /// What the picture viewer shows: the image and who sent it.
@@ -238,12 +279,13 @@ pub fn viewer(ctx:&egui::Context,images:&mut Images){
         let close_rect=egui::Rect::from_min_size(pos2(rect.right()-56.0,rect.top()+16.0),Vec2::splat(36.0));
         ui.painter().rect_filled(close_rect,8,Color32::from_gray(28));ui.painter().rect_stroke(close_rect,8,egui::Stroke::new(1.0_f32,Color32::from_gray(60)),egui::StrokeKind::Inside);
         if tool(ui,close_rect,"Close",|p,c,s|{let d=6.0;p.line_segment([c-Vec2::splat(d),c+Vec2::splat(d)],s);p.line_segment([c+Vec2::new(-d,d),c+Vec2::new(d,-d)],s);}).clicked(){close=true;}
-        let bar=egui::Rect::from_min_size(pos2(close_rect.left()-12.0-3.0*36.0-8.0,close_rect.top()),Vec2::new(3.0*36.0+8.0,36.0));
+        let bar=egui::Rect::from_min_size(pos2(close_rect.left()-12.0-4.0*36.0-8.0,close_rect.top()),Vec2::new(4.0*36.0+8.0,36.0));
         ui.painter().rect_filled(bar,8,Color32::from_gray(28));ui.painter().rect_stroke(bar,8,egui::Stroke::new(1.0_f32,Color32::from_gray(60)),egui::StrokeKind::Inside);
         let slot=|i:f32|egui::Rect::from_min_size(bar.min+Vec2::new(4.0+i*36.0,0.0),Vec2::splat(36.0));
         let zoom=viewer.zoom;
         if tool(ui,slot(0.0),if zoom{"Zoom out"}else{"Zoom in"},|p,c,s|{let o=c-Vec2::splat(2.0);p.circle_stroke(o,6.0,s);p.line_segment([o+Vec2::splat(4.5),o+Vec2::splat(9.0)],s);p.line_segment([o-Vec2::new(3.0,0.0),o+Vec2::new(3.0,0.0)],s);if !zoom{p.line_segment([o-Vec2::new(0.0,3.0),o+Vec2::new(0.0,3.0)],s);}}).clicked(){viewer.zoom=!viewer.zoom;}
         if tool(ui,slot(1.0),"Open in browser",|p,c,s|{let r=egui::Rect::from_center_size(c+Vec2::new(-1.0,1.0),Vec2::splat(12.0));p.rect_stroke(r,2,s,egui::StrokeKind::Middle);p.line_segment([c,c+Vec2::new(7.0,-7.0)],s);p.line_segment([c+Vec2::new(2.0,-7.0),c+Vec2::new(7.0,-7.0)],s);p.line_segment([c+Vec2::new(7.0,-7.0),c+Vec2::new(7.0,-2.0)],s);}).clicked(){ctx.open_url(egui::OpenUrl::new_tab(&url));}
+        if tool(ui,slot(3.0),"Save image",|p,c,s|{p.line_segment([c-Vec2::new(0.0,7.0),c+Vec2::new(0.0,3.0)],s);p.line_segment([c+Vec2::new(-4.0,-1.0),c+Vec2::new(0.0,3.0)],s);p.line_segment([c+Vec2::new(4.0,-1.0),c+Vec2::new(0.0,3.0)],s);p.line_segment([c+Vec2::new(-7.0,7.0),c+Vec2::new(7.0,7.0)],s);}).clicked(){save_image(ctx,&url);}
         if tool(ui,slot(2.0),"Copy link",|p,c,s|{p.rect_stroke(egui::Rect::from_center_size(c+Vec2::splat(2.0),Vec2::splat(10.0)),2,s,egui::StrokeKind::Middle);p.rect_stroke(egui::Rect::from_center_size(c-Vec2::splat(2.0),Vec2::splat(10.0)),2,s,egui::StrokeKind::Middle);}).clicked(){ctx.copy_text(url.clone());}
         if backdrop.clicked()&&!backdrop.interact_pointer_pos().is_some_and(|p|picture.contains(p)){close=true;}
     });
@@ -336,6 +378,13 @@ mod tests {
             if phase==2{assert_eq!(open(&ctx).as_deref(),Some(url),"click did not open the viewer");}
         }
         assert!(open(&ctx).is_none(),"Esc did not close the viewer");
+    }
+    #[test]
+    fn saved_pictures_get_safe_file_names(){
+        assert_eq!(file_name("https://cdn.discordapp.com/attachments/1/2/cat.png?ex=1&hm=2"),"cat.png");
+        assert_eq!(file_name("https://media.discordapp.net/x/a%3Cb>.gif"),"a%3Cb_.gif");
+        assert_eq!(file_name("https://example.com/"),"image.png");
+        assert_eq!(file_name("https://example.com/photo"),"photo.png");
     }
     #[test]
     fn unicode_and_custom_keep_surrounding_text() {

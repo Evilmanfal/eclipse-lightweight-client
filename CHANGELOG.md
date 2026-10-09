@@ -3,6 +3,7 @@
 - Links in messages and embeds are clickable and shown in link blue (right-click to copy).
 - Link previews are one Discord-style card: colored side bar, site name, linked title, description and fields, with the thumbnail inside the card instead of a large separate picture.
 - Click a picture in chat to open it like Discord's viewer: shown at its own size (shrunk only to fit) over the dimmed app, with the sender and time at the top left and zoom, open in browser, copy link and close at the top right. Esc or a click outside closes it.
+- Save pictures from the viewer's download button or the right-click menu (Save image…); Eclipse asks where to save and confirms when it's done.
 - The call screen now shows everyone in the voice channel, including people who were already there when you joined.
 - With push to talk on, your green speaking outline follows your push-to-talk key instead of microphone activity.
 
