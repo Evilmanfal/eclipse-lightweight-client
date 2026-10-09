@@ -277,8 +277,22 @@ fn decode_sized(bytes: &[u8], size: u32) -> Result<Decoded, ()> {
         image.as_raw(),
     )))
 }
+/// Stream preview pictures (Discord's /streams/{key}/preview answer) come from Discord's CDN
+/// without a file extension; the decoder recognizes the format from the bytes. Only links
+/// handed out by that endpoint are checked with this, so attachments keep the stricter rule.
+pub fn stream_preview_url(url: &str) -> bool {
+    url.len() <= 2048
+        && reqwest::Url::parse(url).is_ok_and(|u| {
+            u.scheme() == "https"
+                && matches!(u.host_str(), Some("cdn.discordapp.com" | "media.discordapp.net"))
+                && u.username().is_empty()
+                && u.password().is_none()
+                && u.port().is_none()
+                && !u.path().contains("..")
+        })
+}
 fn fetch(client: &reqwest::blocking::Client, url: &str, size: u32) -> Result<Decoded, ()> {
-    if !public_url(url) {
+    if !public_url(url) && !stream_preview_url(url) {
         return Err(());
     }
     let response = client
@@ -817,6 +831,9 @@ mod tests {
         );
         assert!(!public_url("https://cdn.discordapp.com.evil.com/a.png"));
         assert!(!public_url("http://cdn.discordapp.com/a.png"));
+        assert!(stream_preview_url("https://cdn.discordapp.com/stream-previews/abc123?version=7"));
+        assert!(!public_url("https://cdn.discordapp.com/stream-previews/abc123?version=7"));
+        assert!(!stream_preview_url("https://cdn.discordapp.com.evil.com/x") && !stream_preview_url("http://cdn.discordapp.com/x") && !stream_preview_url("https://evil.com/x"));
         user.id = "../bad".into();
         assert!(avatar_url(&user, None, None).is_none());
     }

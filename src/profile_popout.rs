@@ -129,7 +129,7 @@ impl Eclipse {
         }
         let Some(data)=self.features.get(&feature) else{return Err("Loading preview…".into())};
         let Some(url)=data["url"].as_str() else{return Err("No preview yet".into())};
-        if !assets::public_url(url){
+        if !assets::public_url(url)&&!assets::stream_preview_url(url){
             let host=reqwest::Url::parse(url).ok().and_then(|u|u.host_str().map(str::to_owned)).unwrap_or_default();
             return Err(format!("Preview hosted on {host} is not loaded"));
         }
