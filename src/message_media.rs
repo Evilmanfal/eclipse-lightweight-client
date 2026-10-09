@@ -328,7 +328,9 @@ pub fn embed_card(ui:&mut egui::Ui,images:&mut Images,embed:&Embed,show_images:b
                         egui::Image::new((texture,rect.size())).uv(crate::identity::cover_uv(images.dimensions(url,rect.size(),ui.ctx()).unwrap_or(rect.size()),rect.size())).corner_radius(6).paint_at(ui,rect);
                     }else{ui.painter().rect_filled(rect,6,Color32::from_gray(46));}
                 }
-                if response.clicked(){if let Some(link)=embed.url.as_deref().filter(|u|crate::model::safe_link(u)){ui.ctx().open_url(egui::OpenUrl::new_tab(link));}}
+                // Like other chat pictures: click for the larger view, right-click for open, copy and save.
+                if response.clicked(){open_viewer(ui.ctx(),url);}
+                response.on_hover_cursor(egui::CursorIcon::PointingHand).context_menu(|ui|{if ui.button("Open image").clicked(){ui.ctx().open_url(egui::OpenUrl::new_tab(url));ui.close();}if ui.button("Copy image link").clicked(){ui.ctx().copy_text(url.to_owned());ui.close();}if ui.button("Save image…").clicked(){save_image(ui.ctx(),url);ui.close();}});
             }
         });
         if let Some((url,w,h))=&large{ui.add_space(8.0);picture(ui,images,url,*w,*h,false);}
