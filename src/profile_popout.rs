@@ -99,6 +99,29 @@ impl Eclipse {
     pub(in crate::ui) fn guild_tag_chip(&mut self,ui:&mut egui::Ui,user:&User){
         if let Some((tag,url))=crate::identity::guild_tag(user){egui::Frame::NONE.fill(CARD).corner_radius(4).inner_margin(egui::Margin::symmetric(4,2)).show(ui,|ui|{ui.horizontal(|ui|{ui.spacing_mut().item_spacing.x=3.;if url.is_some(){let(rect,_)=ui.allocate_exact_size(Vec2::splat(13.),egui::Sense::hover());crate::identity::paint_art(ui,&mut self.images,rect,url,0);}ui.label(RichText::new(tag).size(10.).strong().color(TEXT));});});}
     }
+    /// A voice channel (or someone listed under it) as a drop target for a dragged person:
+    /// highlights while hovered and moves them on release.
+    pub(in crate::ui) fn voice_drop_target(&mut self,ui:&egui::Ui,response:&egui::Response,channel:&Channel){
+        if let Some(drag)=response.dnd_hover_payload::<VoiceDrag>().filter(|d|d.from!=channel.id){
+            ui.painter().rect_stroke(response.rect.expand(1.),6,Stroke::new(1.5_f32,self.accent()),egui::StrokeKind::Inside);
+            let _=drag;
+        }
+        if let Some(drag)=response.dnd_release_payload::<VoiceDrag>(){
+            if drag.from!=channel.id&&channel.guild_id.as_deref()==Some(drag.guild.as_str()){
+                if self.preview{self.error=Some("Offline preview: voice moderation is not sent to Discord.".into());}
+                else{self.mutate("voice-moderation",reqwest::Method::PATCH,format!("/guilds/{}/members/{}",drag.guild,drag.user),Some(serde_json::json!({"channel_id":channel.id})));}
+            }
+        }
+    }
+    /// The dragged person's name follows the pointer while moving them between voice channels.
+    pub(in crate::ui) fn voice_drag_overlay(&self,ctx:&egui::Context){
+        let Some(drag)=egui::DragAndDrop::payload::<VoiceDrag>(ctx) else{return};
+        let Some(pointer)=ctx.pointer_latest_pos() else{return};
+        egui::Area::new(egui::Id::new("voice-drag")).order(egui::Order::Tooltip).interactable(false).fixed_pos(pointer+Vec2::new(14.,8.)).show(ctx,|ui|{
+            egui::Frame::NONE.fill(CARD).stroke(Stroke::new(1.0_f32,BORDER)).corner_radius(6).inner_margin(egui::Margin::symmetric(8,4)).show(ui,|ui|{ui.label(RichText::new(format!("Move {}",drag.name)).size(12.).color(TEXT));});
+        });
+        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
     /// Gives the call screen the same people the sidebar lists under the call's voice channel.
     pub(in crate::ui) fn sync_call_roster(&mut self){
         let Some(channel)=self.calls.channel().cloned() else{return};
@@ -172,7 +195,13 @@ impl Eclipse {
             if offer{hovered_live=Some((state.user_id.clone(),row));}
             let (muted,deafened)=if own{(self.calls.muted(),self.calls.deafened())}else{(state.muted,state.deafened)};
             // Right-clicking anywhere on the row opens the person's menu plus voice moderation.
-            let row_response=ui.interact(row,egui::Id::new(("voice-row",&channel.id,&state.user_id)),egui::Sense::click());
+            let row_response=ui.interact(row,egui::Id::new(("voice-row",&channel.id,&state.user_id)),if can_move{egui::Sense::click_and_drag()}else{egui::Sense::click()});
+            // With Move Members, drag someone onto another voice channel to move them, like Discord.
+            if can_move&&row_response.drag_started(){
+                if let Some(guild)=channel.guild_id.clone(){egui::DragAndDrop::set_payload(ui.ctx(),VoiceDrag{user:state.user_id.clone(),name:name.clone(),from:channel.id.clone(),guild});}
+            }
+            // Dropping onto someone already in this channel moves the dragged person here too.
+            self.voice_drop_target(ui,&row_response,channel);
             ui.horizontal(|ui|{
                 ui.spacing_mut().item_spacing.x=6.;ui.add_space(26.);
                 let before=ui.cursor().min;
@@ -301,3 +330,6 @@ pub(in crate::ui) fn voice_moderation_menu(ui:&mut egui::Ui,state:&crate::voice_
     }
     change.map(|change|(state.user_id.clone(),change))
 }
+
+/// Someone being dragged to another voice channel.
+pub(in crate::ui) struct VoiceDrag { user: String, name: String, from: String, guild: String }

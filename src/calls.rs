@@ -94,6 +94,8 @@ pub struct Calls {
     participants: HashMap<String, User>,
     /// Participant ids in the order they joined, so newcomers appear on the right.
     join_order: Vec<String>,
+    /// We were moved to another channel and still need its details from the app.
+    moved: bool,
     speaking: Vec<u64>,
     frames: Arc<Mutex<HashMap<u64, VideoFrame>>>,
     textures: HashMap<u64, egui::TextureHandle>,
@@ -202,6 +204,7 @@ impl Calls {
             active_epoch,
             participants: HashMap::new(),
             join_order: Vec::new(),
+            moved: false,
             speaking: vec![],
             channel: None,
             user: None,
@@ -347,8 +350,11 @@ impl Calls {
                 }
                 if data["user_id"].as_str() == Some(&user.id) {
                     if data["channel_id"].as_str() != Some(&channel.id) {
-                        if self.session_id.is_some() {
-                            self.disconnect();
+                        match data["channel_id"].as_str() {
+                            // Moved by a moderator or a bot (such as "join to create" channels):
+                            // follow to the new channel like Discord, instead of hanging up.
+                            Some(moved) if self.session_id.is_some() && channel.guild_id.is_some() => self.follow_move(moved, data),
+                            _ => if self.session_id.is_some() { self.disconnect(); },
                         }
                         return;
                     }
@@ -466,6 +472,10 @@ impl Calls {
             }
             _ => {}
         }
+        self.resume_media();
+    }
+    /// Starts the voice connection once Discord has supplied the session, token and endpoint.
+    fn resume_media(&mut self) {
         if self.media.is_none()
             && self.session_id.is_some()
             && self.token.is_some()
@@ -477,6 +487,36 @@ impl Calls {
                 self.error = Some(error.into());
             }
         }
+    }
+    /// Discord moved us to another voice channel of the same server: rebuild the voice
+    /// connection for it. Your screen share and any watched stream end, as in Discord.
+    fn follow_move(&mut self, moved: &str, data: &Value) {
+        if id(moved).is_err() { return; }
+        self.stop_share();
+        self.stop_watching();
+        self.media = None;
+        self.ready = false;
+        self.epoch = self.epoch.wrapping_add(1);
+        self.active_epoch.store(self.epoch, Ordering::Release);
+        self.textures.clear();
+        self.streams.clear();
+        self.speaking.clear();
+        let me = self.user.as_ref().map(|u| u.id.clone()).unwrap_or_default();
+        self.participants.retain(|id, _| *id == me);
+        self.join_order.clear();
+        if let Some(channel) = &mut self.channel {
+            channel.id = moved.to_owned();
+            channel.name = None;
+        }
+        self.moved = true;
+        self.status = "Moving to another voice channel…".into();
+        if let Some(session) = data["session_id"].as_str() { self.session_id = Some(Zeroizing::new(session.into())); }
+        self.resume_media();
+    }
+    /// After a move, the app fills in the new channel's name and details.
+    pub fn moved_channel(&self) -> Option<&str> { self.moved.then(|| self.channel.as_ref().map(|c| c.id.as_str())).flatten() }
+    pub fn set_moved_channel(&mut self, channel: Channel) {
+        if self.channel.as_ref().is_some_and(|c| c.id == channel.id) { self.channel = Some(channel); self.moved = false; }
     }
     fn credentials(&self) -> Result<VoiceConnection, &'static str> {
         let channel = self.channel.as_ref().ok_or("Call ended")?;
@@ -1491,6 +1531,24 @@ mod tests {
         assert_eq!(calls.in_join_order().iter().map(|u|u.id.as_str()).collect::<Vec<_>>(),["10","30","20"],"a newcomer goes on the right, not by id");
         calls.participants.remove("30");
         assert_eq!(calls.in_join_order().iter().map(|u|u.id.as_str()).collect::<Vec<_>>(),["10","20"]);
+    }
+    #[test]
+    fn being_moved_follows_to_the_new_channel_instead_of_hanging_up(){
+        let mut calls=Calls::new(egui::Context::default());
+        let me=User{id:"1".into(),username:"me".into(),..Default::default()};
+        calls.join(&Channel{id:"10".into(),guild_id:Some("5".into()),kind:2,name:Some("Join to Create".into()),..Default::default()},&me,false).unwrap();
+        calls.signal("VOICE_STATE_UPDATE",&json!({"user_id":"1","channel_id":"10","session_id":"s1"}));
+        assert!(calls.active());
+        // The bot moves us into the channel it just created.
+        calls.signal("VOICE_STATE_UPDATE",&json!({"user_id":"1","channel_id":"11","session_id":"s1"}));
+        assert!(calls.active(),"still in a call");
+        assert_eq!(calls.channel().map(|c|c.id.as_str()),Some("11"));
+        assert_eq!(calls.moved_channel(),Some("11"));
+        calls.set_moved_channel(Channel{id:"11".into(),guild_id:Some("5".into()),kind:2,name:Some("Jason's channel".into()),..Default::default()});
+        assert!(calls.moved_channel().is_none()&&calls.channel().is_some_and(|c|c.name.as_deref()==Some("Jason's channel")));
+        // Being disconnected still ends the call.
+        calls.signal("VOICE_STATE_UPDATE",&json!({"user_id":"1","channel_id":null,"session_id":"s1"}));
+        assert!(!calls.active());
     }
     #[test]
     fn friends_show_as_speaking_while_the_voice_server_reports_them(){

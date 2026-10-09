@@ -1390,6 +1390,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                                     )
                                 };
                                 response.context_menu(|ui|self.channel_menu(ui,&channel));
+                                if matches!(channel.kind,2|13) {self.voice_drop_target(ui,&response,&channel);}
                                 if selected {
                                     let rect = response.rect;
                                     ui.painter().rect_filled(
@@ -2142,7 +2143,9 @@ impl eframe::App for Eclipse {
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(Color32::BLACK)).show(ctx,|ui|self.calls.stage(ui,&mut self.images));
         } else {
             self.left_column(ctx);
-            if self.home!=Home::Chat{self.home_panel(ctx);}else{self.conversation_header(ctx);if self.calls.active(){self.sync_call_roster();}if self.calls.active()&&!self.calls.chat{egui::CentralPanel::default().frame(egui::Frame::NONE.fill(preferences_bg(&self.prefs)).inner_margin(if self.compact{0}else{8})).show(ctx,|ui|self.calls.stage(ui,&mut self.images));}else{self.members(ctx);self.conversation(ctx);}}
+            if self.home!=Home::Chat{self.home_panel(ctx);}else{self.conversation_header(ctx);if self.calls.active(){self.sync_call_roster();}
+                if let Some(moved)=self.calls.moved_channel().map(str::to_owned){if let Some(channel)=self.channels.iter().find(|c|c.id==moved).cloned(){self.calls.set_moved_channel(channel);}}
+                if self.calls.active()&&!self.calls.chat{egui::CentralPanel::default().frame(egui::Frame::NONE.fill(preferences_bg(&self.prefs)).inner_margin(if self.compact{0}else{8})).show(ctx,|ui|self.calls.stage(ui,&mut self.images));}else{self.members(ctx);self.conversation(ctx);}}
         }
         self.dialogs(ctx);
         if self.home!=Home::Chat||self.settings||self.server_settings||self.channel.as_ref().is_none_or(|c|c.id!=self.picker.channel)||self.calls.active()&&!self.calls.chat{self.picker.close();}
@@ -2461,6 +2464,16 @@ mod interaction_tests {
         assert_eq!(run(click(mute),true).0,Some(("77".to_owned(),serde_json::json!({"mute":false}))),"server-muted, so the click unmutes");
         let (chosen,output)=run(vec![],false);
         assert!(chosen.is_none()&&!output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t)if t.galley.job.text=="Disconnect")),"no moderation without permission");
+    }
+    #[test]fn channels_created_or_deleted_by_a_bot_show_up_live(){
+        let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);
+        let guild=app.guild.clone().expect("sample server");
+        app.account_event("CHANNEL_CREATE",&serde_json::json!({"id":"9001","guild_id":guild,"type":2,"name":"Jason's channel","position":99}));
+        assert!(app.channels.iter().any(|c|c.id=="9001"&&c.kind==2),"a new voice channel appears without switching servers");
+        app.account_event("CHANNEL_DELETE",&serde_json::json!({"id":"9001","guild_id":guild,"type":2}));
+        assert!(!app.channels.iter().any(|c|c.id=="9001"));
+        app.account_event("CHANNEL_CREATE",&serde_json::json!({"id":"9002","guild_id":"another-server","type":2,"name":"elsewhere"}));
+        assert!(!app.channels.iter().any(|c|c.id=="9002"),"other servers' channels stay out of this list");
     }
     fn composer_frame(ctx:&egui::Context,app:&mut Eclipse,channel:&Channel,events:Vec<egui::Event>)->egui::FullOutput{ctx.run(input(events),|ctx|{egui::CentralPanel::default().show(ctx,|ui|{app.composer(ui,ctx,channel);});})}
     #[test]fn typing_at_lists_members_and_enter_inserts_a_mention_sent_as_an_id(){

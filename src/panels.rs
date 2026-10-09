@@ -60,6 +60,15 @@ impl Eclipse {
         self.voice.ingest(kind,data);
         self.server.ingest(kind,data);
         if matches!(kind,"CHANNEL_CREATE"|"CHANNEL_UPDATE"|"CHANNEL_DELETE"|"GUILD_DELETE"){if let Some(id)=data["guild_id"].as_str().or_else(||if kind=="GUILD_DELETE"{data["id"].as_str()}else{None}){self.navigation.invalidate_channels(id);}}
+        // Live channel changes in the open server (for example a bot's new voice channel).
+        if matches!(kind,"CHANNEL_CREATE"|"CHANNEL_UPDATE"|"CHANNEL_DELETE")&&data["guild_id"].as_str().is_some_and(|g|self.guild.as_deref()==Some(g)){
+            if let Ok(channel)=serde_json::from_value::<Channel>(data.clone()){
+                self.channels.retain(|c|c.id!=channel.id);
+                if kind!="CHANNEL_DELETE"&&self.channels.len()<1000{self.channels.push(channel);}
+                crate::navigation::sort_channels(&mut self.channels);
+                if let Some(guild)=self.guild.clone(){self.navigation.save_channels(&guild,&self.channels);}
+            }
+        }
         match kind{
             "READY"=>{
                 if let Some(guilds)=data["guilds"].as_array(){for guild in guilds.iter().take(12){if let(Some(id),Some(channels))=(guild["id"].as_str(),guild["channels"].as_array()){let mut channels:Vec<Channel>=channels.iter().filter_map(|c|serde_json::from_value(c.clone()).ok()).take(500).collect();for c in &mut channels{c.guild_id=Some(id.into());}crate::navigation::sort_channels(&mut channels);self.navigation.save_channels(id,&channels);}}}

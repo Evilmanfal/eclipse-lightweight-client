@@ -735,7 +735,7 @@ fn gateway(
                     Some(0) => {
                         let data = &value["d"];
                         let kind=value["t"].as_str().unwrap_or_default();
-                        if matches!(kind,"READY"|"READY_SUPPLEMENTAL"|"GUILD_CREATE"|"GUILD_UPDATE"|"GUILD_MEMBER_ADD"|"GUILD_MEMBER_UPDATE"|"GUILD_MEMBER_REMOVE"|"GUILD_MEMBERS_CHUNK"|"GUILD_MEMBER_LIST_UPDATE"|"GUILD_ROLE_CREATE"|"GUILD_ROLE_UPDATE"|"GUILD_ROLE_DELETE"|"RELATIONSHIP_ADD"|"RELATIONSHIP_UPDATE"|"RELATIONSHIP_REMOVE"|"USER_SETTINGS_UPDATE"|"MESSAGE_ACK"|"QUESTS_USER_STATUS_UPDATE"|"GUILD_DELETE") {
+                        if matches!(kind,"READY"|"READY_SUPPLEMENTAL"|"GUILD_CREATE"|"GUILD_UPDATE"|"GUILD_MEMBER_ADD"|"GUILD_MEMBER_UPDATE"|"GUILD_MEMBER_REMOVE"|"GUILD_MEMBERS_CHUNK"|"GUILD_MEMBER_LIST_UPDATE"|"GUILD_ROLE_CREATE"|"GUILD_ROLE_UPDATE"|"GUILD_ROLE_DELETE"|"RELATIONSHIP_ADD"|"RELATIONSHIP_UPDATE"|"RELATIONSHIP_REMOVE"|"USER_SETTINGS_UPDATE"|"MESSAGE_ACK"|"QUESTS_USER_STATUS_UPDATE"|"CHANNEL_CREATE"|"CHANNEL_UPDATE"|"CHANNEL_DELETE"|"GUILD_DELETE") {
                             if !emit(&tx,&ctx,Event::Account(kind.into(),data.clone())){return Ok(());}
                         }
                         let event = match value["t"].as_str().unwrap_or("") {

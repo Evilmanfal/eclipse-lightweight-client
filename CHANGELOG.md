@@ -1,5 +1,8 @@
 # Unreleased
 
+- Being moved to another voice channel (by a moderator, or a bot's "join to create" channel) now follows you there and reconnects, instead of disconnecting you.
+- New, renamed and deleted channels appear live in the server list (Eclipse ignored these events before, so a bot's new voice channel never showed up).
+- Drag someone under a voice channel onto another voice channel to move them (with Move Members); the target highlights and their name follows the pointer.
 - Right-click someone under a voice channel for voice moderation, shown only with the matching server permission: Server Mute, Server Deafen, Move To (any other voice channel) and Disconnect.
 - Stream preview pictures load (Discord serves them without a file extension), and the hover popup says why when there is no picture.
 - Push to talk sounds clean from the first word: releasing the key now only stops sending, instead of muting, which restarted echo cancellation and noise suppression on every press (static at the start, muffled short phrases).
