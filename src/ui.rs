@@ -1054,7 +1054,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
     }
     fn paint_image(&mut self, ui: &egui::Ui, rect: egui::Rect, url: Option<String>, radius: u8) {
         if ui.is_rect_visible(rect) {
-            if let Some(id) = url.and_then(|url| self.images.texture_sized(&url,rect.size(), ui.ctx())) {
+            if let Some(id) = url.and_then(|url| self.images.texture_hover(&url,rect, ui.ctx())) {
                 ui.painter().rect_filled(rect, radius, CARD);
                 egui::Image::new((id, rect.size()))
                     .corner_radius(radius)
@@ -1660,7 +1660,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                             if self.prefs.show_usernames{ui.weak(format!("@{}",message.author.username));}
                             if self.prefs.images&&message.embeds.is_empty() {
                                 for url in crate::message_media::direct_images(&message.content) {
-                                    crate::message_media::picture(ui,&mut self.images,&url,None,None);
+                                    crate::message_media::picture(ui,&mut self.images,&url,None,None,true);
                                 }
                             }
                         }
@@ -1673,6 +1673,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                                     &attachment.url,
                                     None,
                                     None,
+                                    true,
                                 );
                             }
                             if !inline && safe_link(&attachment.url) {
@@ -1697,7 +1698,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         for embed in &message.embeds {
                             if self.prefs.images {
                                 let animated=embed.video.as_ref().filter(|v|embed.kind=="gifv"||v.url.as_ref().is_some_and(|u|u.contains(".gif")));
-                                if let Some(image)=animated.or(embed.image.as_ref()).or(embed.thumbnail.as_ref()) {if let Some(url)=image.url.as_deref().filter(|u|assets::public_url(u)).or(image.proxy_url.as_deref()){crate::message_media::picture(ui,&mut self.images,url,image.width,image.height);}}
+                                if let Some(image)=animated.or(embed.image.as_ref()).or(embed.thumbnail.as_ref()) {if let Some(url)=image.url.as_deref().filter(|u|assets::public_url(u)).or(image.proxy_url.as_deref()){crate::message_media::picture(ui,&mut self.images,url,image.width,image.height,true);}}
                             }
                             if !(self.prefs.images&&crate::message_media::media_embed(embed)) && (embed.title.is_some() || embed.description.is_some()) {
                                 egui::Frame::NONE

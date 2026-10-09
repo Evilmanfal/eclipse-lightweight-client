@@ -31,7 +31,7 @@ impl Eclipse {
             if kind==1&&!self.preview&&!self.features.contains_key("profile-effects")&&!self.feature_errors.contains_key("profile-effects"){self.request_feature("profile-effects","/user-profile-effects".into());}
             if let Some(background)=product["preview_assets"]["bg_static"].as_str().and_then(collectible_asset){crate::identity::paint_art(ui,&mut self.images,rect,Some(background),9);}
             if let Some(url)=image{
-                if let Some(texture)=self.images.texture_sized(&url,rect.size(),ui.ctx()){
+                if let Some(texture)=self.images.texture_hover(&url,rect,ui.ctx()){
                     let dimensions=self.images.dimensions(&url,rect.size(),ui.ctx()).unwrap_or(rect.size());let size=dimensions*((rect.width()-16.)/dimensions.x).min((rect.height()-16.)/dimensions.y);
                     let art=egui::Rect::from_center_size(rect.center(),size);egui::Image::new((texture,size)).corner_radius(7).paint_at(ui,art);
                 }else{ui.painter().text(rect.center(),egui::Align2::CENTER_CENTER,if self.images.failed(&url){"Artwork unavailable"}else{"Loading artwork…"},egui::FontId::proportional(12.),MUTED);}

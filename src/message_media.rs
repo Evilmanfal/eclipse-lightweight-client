@@ -98,7 +98,7 @@ pub fn body(ui: &mut egui::Ui, images: &mut Images, text: &str) ->Vec<egui::Resp
                     let (rect, response) =
                         ui.allocate_exact_size(Vec2::splat(23.0), egui::Sense::click());
                     if ui.is_rect_visible(rect) {
-                        if let Some(texture) = images.texture(&url, ui.ctx()) {
+                        if let Some(texture) = images.texture(&url, rect, ui.ctx()) {
                             egui::Image::new((texture, rect.size())).paint_at(ui, rect);
                         } else {
                             ui.painter().text(
@@ -123,6 +123,7 @@ pub fn picture(
     url: &str,
     width: Option<u32>,
     height: Option<u32>,
+    gif: bool,
 ) {
     if !crate::assets::public_url(url) {
         return;
@@ -139,7 +140,9 @@ pub fn picture(
     ui.painter()
         .rect_filled(rect, 19, egui::Color32::from_gray(36));
     if ui.is_rect_visible(rect) {
-        if let Some(texture) = images.texture_sized(url,rect.size(), ui.ctx()) {
+        // Chat GIFs keep playing; other animated pictures play only on hover.
+        let texture = if gif { images.texture_sized(url, rect.size(), ui.ctx()) } else { images.texture_hover(url, rect, ui.ctx()) };
+        if let Some(texture) = texture {
             egui::Image::new((texture, rect.size()))
                 .uv(crate::identity::cover_uv(images.dimensions(url,rect.size(),ui.ctx()).unwrap_or(rect.size()),rect.size()))
                 .corner_radius(19)
