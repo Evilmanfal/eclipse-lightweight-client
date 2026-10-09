@@ -2,7 +2,7 @@
 
 Independent Windows x64 Discord client in Rust, egui and OpenGL. Run **Eclipse.exe** from this folder. No Electron, WebView, installation, service or automatic startup is required. Installed Discord is untouched. Renamed from Feather; one current `eclipse-native` folder is retained. Your existing preferences are carried over to `eclipse-settings.json`. The orange/red eclipse icon is embedded in the EXE and used by the window/taskbar.
 
-Use Eclipse's token-entry screen or the offline preview. Credentials remain in memory and never enter preferences. Personal-account access is unofficial; Discord can change its APIs or restrict accounts using them.
+Sign in with a QR code (scan it with the Discord mobile app; no password or 2FA prompt) or with your email/phone and password, including authenticator-app, backup and SMS 2FA codes. Security keys and passkeys need a browser, so use the QR code for those accounts. Discord may ask for a captcha on password sign-ins, which also needs the QR code. With Stay signed in (on by default) the session is stored in Windows Credential Manager under "Eclipse/Discord session", encrypted to your Windows account, and resumed at launch; Log out removes it. Passwords and codes are never saved, and the session never enters `eclipse-settings.json`. You can also explore the offline preview. Personal-account access is unofficial; Discord can change its APIs or restrict accounts using them.
 
 ## Push to talk
 

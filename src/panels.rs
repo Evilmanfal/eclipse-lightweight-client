@@ -11,6 +11,9 @@ use serde_json::{json,Value};
 #[path="user_panel.rs"] mod user_panel;
 #[path="pins.rs"] mod pins;
 #[path="full_profile.rs"] mod full_profile;
+#[path="account_menu.rs"] mod account_menu;
+#[path="login_screen.rs"] mod login_screen;
+pub(in crate::ui) use login_screen::LoginUi;
 pub(in crate::ui) use user_panel::USER_PANEL_HEIGHT;
 pub(in crate::ui) use profile_popout::profile_key_for;
 
@@ -141,7 +144,7 @@ impl Eclipse {
                             ui.add_space(12.);ui.label(RichText::new(*category).size(10.).strong().color(MUTED));
                             for page in visible{if crate::widgets::nav_row(ui,page,self.settings_page==**page,if self.settings_page==**page{TEXT}else{MUTED}).clicked(){self.settings_page=(**page).into();self.hotkey_record=None;self.load_settings_section();}}
                         }
-                    });ui.separator();if ui.button("Log out").clicked(){self.disconnect();self.settings=false;}
+                    });ui.separator();if ui.button("Log out").clicked(){self.log_out();self.settings=false;}
                 });});
                 egui::Frame::NONE.inner_margin(egui::Margin::symmetric(22,16)).show(ui,|ui|{ui.vertical(|ui|{ui.set_width(size.x-280.);
                     egui::ScrollArea::vertical().id_salt(("settings-body",&self.settings_page)).max_height(size.y-32.).auto_shrink([false,false]).show(ui,|ui|{self.settings_body(ui);});

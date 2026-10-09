@@ -361,6 +361,9 @@ struct Texture {
     playback: Playback,
     /// Last egui pass that asked this texture to play.
     played: u64,
+    /// One more than the last egui pass that drew this texture (0 = not drawn); on-screen
+    /// textures are never evicted.
+    seen: u64,
 }
 pub struct Images {
     animate:bool,
@@ -475,17 +478,38 @@ impl Images {
     pub fn sampled(&self) -> usize {
         self.textures.values().filter(|v| v.data.sampled).count()
     }
-    fn insert(&mut self, ctx: &egui::Context, key: String, data: Decoded) {
+    fn insert(&mut self, ctx: &egui::Context, key: String, mut data: Decoded) {
         if data.bytes > PIXEL_BUDGET {
             return;
         }
         self.textures.remove(&key);
+        let pass = ctx.cumulative_pass_nr();
         // Keep source cadence. Evict least-recently used assets instead of thinning live animations.
+        // Server icons and avatars go last: they are small and on screen almost everywhere, so
+        // large artwork (Shop, Quests, banners) must not push them out and force reloads.
+        // Anything drawn this pass or the last one is on screen: evicting it would only reload it
+        // next frame and evict something else, so the screen would flicker and refresh forever.
         while self.textures.len() >= TEXTURE_LIMIT || self.bytes() + data.bytes > PIXEL_BUDGET {
+            let off_screen = self
+                .textures
+                .iter()
+                .filter(|(_, v)| v.seen == 0 || v.seen < pass)
+                .min_by_key(|(k, v)| (is_icon(k), v.used))
+                .map(|(k, _)| k.clone());
+            if let Some(key) = off_screen {
+                self.textures.remove(&key);
+                continue;
+            }
+            // Everything cached is visible: keep this animation as a still image instead.
+            if data.frames.len() > 1 {
+                data.frames.truncate(1);
+                data.bytes = data.frames[0].image.pixels.len() * 4;
+                continue;
+            }
             let Some(key) = self
                 .textures
                 .iter()
-                .min_by_key(|(_, v)| v.used)
+                .min_by_key(|(k, v)| (is_icon(k), v.used))
                 .map(|(k, _)| k.clone())
             else {
                 break;
@@ -506,6 +530,7 @@ impl Images {
                 data,
                 playback: Playback::default(),
                 played: 0,
+                seen: pass + 1,
             },
         );
     }
@@ -533,7 +558,9 @@ impl Images {
             } else {
                 Decoded::still(demo_image(&key, 0.0, 128))
             };
-            self.insert(ctx, key, data);
+            // The workload streams through (scrolled past), so nothing it inserts stays on screen.
+            self.insert(ctx, key.clone(), data);
+            if let Some(texture) = self.textures.get_mut(&key) { texture.seen = 0; }
         }
     }
     pub fn poll(&mut self, ctx: &egui::Context) {
@@ -568,6 +595,11 @@ impl Images {
     pub fn texture_hover(&mut self,url:&str,rect:egui::Rect,ctx:&egui::Context)->Option<TextureId>{
         self.texture_key(&cache_key(url,resolution(rect.size(),ctx.pixels_per_point())),ctx,hovered(ctx,rect))
     }
+    /// Like `texture_hover`, but `always` keeps it playing without the pointer (the selected server,
+    /// nameplates and avatar decorations).
+    pub fn texture_playing(&mut self,url:&str,rect:egui::Rect,ctx:&egui::Context,always:bool)->Option<TextureId>{
+        self.texture_key(&cache_key(url,resolution(rect.size(),ctx.pixels_per_point())),ctx,always||hovered(ctx,rect))
+    }
     pub fn dimensions(&self,url:&str,size:egui::Vec2,ctx:&egui::Context)->Option<egui::Vec2>{
         self.textures.get(&cache_key(url,resolution(size,ctx.pixels_per_point()))).map(|t|{let size=t.handle.size();egui::vec2(size[0]as f32,size[1]as f32)})
     }
@@ -577,6 +609,7 @@ impl Images {
         self.clock = self.clock.wrapping_add(1);
         if let Some(texture) = self.textures.get_mut(key) {
             texture.used = self.clock;
+            texture.seen = ctx.cumulative_pass_nr() + 1;
             // An unfocused window holds every animation, GIFs included, on its current frame.
             if self.animate && texture.data.frames.len() > 1 && ctx.input(|i|i.focused) {
                 // One texture can be drawn in several places. It plays if any of them
@@ -609,8 +642,7 @@ impl Images {
         {
             return None;
         }
-        let source=source_key(key).0;
-        let queue=if source.contains("/icons/")||source.contains("/avatars/")||source.contains("/embed/avatars/"){&self.icon_tx}else{&self.tx};
+        let queue=if is_icon(key){&self.icon_tx}else{&self.tx};
         if queue.try_send(Job {
                 generation: self.generation,
                 key: key.to_owned(),
@@ -624,6 +656,8 @@ impl Images {
     pub fn playback_options(&mut self,animate:bool,fps:u32){self.animate=animate;self.frame_interval=Duration::from_secs_f64(1. / fps.clamp(5,60) as f64);}
     pub fn failed(&self,key:&str)->bool{self.failed.contains_key(key)||[64,128,256,512,1024].into_iter().any(|n|self.failed.contains_key(&cache_key(key,n)))}
 }
+/// Server icons and user avatars (including Discord's default avatars).
+fn is_icon(key:&str)->bool{let source=source_key(key).0;source.contains("/icons/")||source.contains("/avatars/")||source.contains("/embed/avatars/")}
 fn hovered(ctx:&egui::Context,rect:egui::Rect)->bool{ctx.pointer_hover_pos().is_some_and(|p|rect.contains(p))}
 fn bundled(key:&str)->Option<&'static [u8]>{match key{
     "builtin://discord/nitro-background"=>Some(include_bytes!("../assets/discord/nitro-background.png")),
@@ -874,6 +908,24 @@ mod tests {
         assert_eq!(step(false), paused);
         step(true);
         assert!(step(true) > paused);
+    }
+    #[test]
+    fn large_artwork_does_not_evict_icons_or_avatars() {
+        let ctx = egui::Context::default();
+        let mut cache = Images::new(&ctx);
+        let load = |cache: &mut Images, key: &str| {
+            let until = Instant::now() + Duration::from_secs(5);
+            while cache.texture(key, egui::Rect::NOTHING, &ctx).is_none() {
+                cache.poll(&ctx);
+                assert!(Instant::now() < until, "image worker did not finish");
+                thread::sleep(Duration::from_millis(1));
+            }
+        };
+        // The avatar is the least recently used entry, yet a Shop-sized flood of artwork leaves it cached.
+        load(&mut cache, "demo://cdn/avatars/1/keep");
+        for i in 0..TEXTURE_LIMIT + 40 { load(&mut cache, &format!("demo://shop/art/{i}")); }
+        assert!(cache.textures.contains_key("demo://cdn/avatars/1/keep"));
+        assert!(!cache.textures.contains_key("demo://shop/art/0"));
     }
     #[test]
     fn cache_evicts_old_images_and_discards_inflight_images_after_clear() {

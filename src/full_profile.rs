@@ -46,7 +46,7 @@ impl Eclipse {
                         let url=if self.preview{Some(format!("demo://user/{}",user.id))}else{assets::avatar_url(&user,guild.as_deref(),data["guild_member"]["avatar"].as_str())};
                         self.paint_image(ui,portrait,url,52);
                         let mut decorated=user.clone();if let Some(value)=data["guild_member"]["avatar_decoration_data"].as_object(){decorated.avatar_decoration_data=Some(Value::Object(value.clone()));}
-                        crate::identity::paint_art(ui,&mut self.images,portrait.expand(10.),crate::identity::decoration(&decorated),0);
+                        crate::identity::paint_art_playing(ui,&mut self.images,portrait.expand(10.),crate::identity::decoration(&decorated),0);
                         crate::presence::badge(ui,portrait,self.presences.get(&user.id,guild.as_deref()));
                         ui.add_space(52.);
                         egui::Frame::NONE.inner_margin(egui::Margin::symmetric(18,4)).show(ui,|ui|{

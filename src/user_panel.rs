@@ -10,16 +10,17 @@ impl Eclipse {
         let (rect,_)=ui.allocate_exact_size(Vec2::new(ui.available_width(),USER_PANEL_HEIGHT),egui::Sense::hover());
         let radius=if self.compact{0}else{12};
         ui.painter().rect_filled(rect,radius,crate::preferences::color(&self.prefs.theme.surface).unwrap_or(SIDE));
-        crate::identity::paint_art(ui,&mut self.images,rect,crate::identity::nameplate(&user),radius);
+        crate::identity::paint_art_playing(ui,&mut self.images,rect,crate::identity::nameplate(&user),radius);
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink2(Vec2::new(8.,0.))).layout(egui::Layout::left_to_right(egui::Align::Center)),|ui|{
             ui.spacing_mut().item_spacing.x=2.;
-            self.user_avatar(ui,&user,None,34.);ui.add_space(6.);
+            let avatar=self.paint_avatar(ui,&user,None,34.,true);ui.add_space(6.);
+            if avatar.clicked(){self.toggle_account_menu(rect);}
             let controls=if self.prefs.activity_toggle{30.+2.}else{0.}+3.*30.+2.*12.+5.*2.;
             let text=Vec2::new((ui.available_width()-controls).max(20.),38.);
             ui.allocate_ui_with_layout(text,egui::Layout::top_down(egui::Align::Min),|ui|{
                 ui.set_width(text.x);ui.shrink_clip_rect(ui.max_rect());ui.spacing_mut().item_spacing.y=0.;
                 let label=if self.prefs.streamer{"Hidden".to_owned()}else{user.name().to_owned()};
-                if crate::identity::name(ui,&user,&label,15.,TEXT).clicked(){self.toggle_profile_at(&user,rect);}
+                if crate::identity::name(ui,&user,&label,15.,TEXT).clicked(){self.toggle_account_menu(rect);}
                 ui.add(egui::Label::new(RichText::new(self.own_status_label(&user)).size(11.).color(Color32::from_gray(200))).truncate());
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{

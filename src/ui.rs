@@ -40,7 +40,11 @@ pub struct Eclipse {
     channel: Option<Channel>,
     messages: VecDeque<Message>,
     navigation: crate::navigation::Cache,
-    token: String,
+    login_ui: panels::LoginUi,
+    /// Token from a sign-in in progress; saved to Credential Manager once Discord accepts it.
+    pending_save: Option<zeroize::Zeroizing<String>>,
+    /// This session was restored from the saved sign-in at launch.
+    auto_login: bool,
     error: Option<String>,
     status: String,
     drafts: HashMap<String, String>,
@@ -69,6 +73,10 @@ pub struct Eclipse {
     full_profile: Option<User>,
     full_profile_guild: Option<String>,
     full_profile_tab: u8,
+    /// Account menu above the bottom-left bar: anchor, opened this frame, expanded row (status / switch).
+    account_anchor: Option<egui::Rect>,
+    account_just_opened: bool,
+    account_expanded: Option<u8>,
     dm_search: String,
     dm_modal: bool,
     dm_anchor: Option<egui::Rect>,
@@ -135,7 +143,13 @@ pub struct Eclipse {
     composer_ime: bool,
 }
 impl Eclipse {
-    pub fn new(cc: &eframe::CreationContext<'_>, preview: bool, smoke: Option<String>) -> Self {Self::with_context(&cc.egui_ctx,preview,smoke)}
+    pub fn new(cc: &eframe::CreationContext<'_>, preview: bool, smoke: Option<String>) -> Self {
+        let restore=!preview&&smoke.is_none();
+        let mut app=Self::with_context(&cc.egui_ctx,preview,smoke);
+        // Stay signed in: resume the session saved in Windows Credential Manager.
+        if restore{if let Some(token)=crate::login::saved::load(){app.begin_session(token,&cc.egui_ctx);app.auto_login=true;}}
+        app
+    }
     fn with_context(ctx:&egui::Context,preview:bool,smoke:Option<String>)->Self {
         crate::widgets::fonts(&ctx);
         ctx.set_theme(egui::ThemePreference::Dark);
@@ -180,7 +194,9 @@ impl Eclipse {
             channel: None,
             messages: VecDeque::new(),
             navigation: Default::default(),
-            token: String::new(),
+            login_ui: Default::default(),
+            pending_save: None,
+            auto_login: false,
             error: None,
             status: "Offline".into(),
             drafts: HashMap::new(),
@@ -204,6 +220,9 @@ impl Eclipse {
             full_profile: None,
             full_profile_guild: None,
             full_profile_tab: 0,
+            account_anchor: None,
+            account_just_opened: false,
+            account_expanded: None,
             dm_search: String::new(),
             dm_modal: false,
             dm_anchor:None,dm_just_opened:false,
@@ -331,6 +350,7 @@ impl Eclipse {
             "server-hover"=>self.preview_gesture=Some("server"),
             "full-profile"=>{if let Some(mut user)=self.messages.front().map(|m|m.author.clone()){user.display_name_styles=Some(serde_json::json!({"font_id":14,"effect_id":2,"colors":[12034809,4437965]}));self.open_full_profile(&user);let key=crate::ui::panels::profile_key_for(&user.id,self.full_profile_guild.as_deref());self.features.insert(key,serde_json::json!({"user_profile":{"pronouns":"they / them","bio":"Building little things with good people.
 A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member":{"joined_at":"2021-10-13T00:00:00Z"},"connected_accounts":[{"type":"twitch","name":"eclipse","verified":true},{"type":"xbox","name":"Eclipse"}]}));}},
+            "account-menu"=>{self.account_anchor=Some(egui::Rect::from_min_size(egui::pos2(4.,814.),Vec2::new(311.,52.)));self.account_just_opened=true;self.account_expanded=Some(0);},
             "pins"=>{self.pins_anchor=Some(egui::Rect::from_min_size(egui::pos2(1144.,17.),Vec2::splat(28.)));self.pins_just_opened=true;self.pins=Some(self.messages.iter().filter(|m|m.pinned).cloned().collect());},
             "settings"=>{self.settings=true;self.settings_page="Account & Profile".into();},
             "dm-picker"=>{self.navigate_home(Home::Friends);self.open_dm_picker(egui::Rect::from_min_size(egui::pos2(250.,338.),Vec2::new(28.,24.)));self.dm_search="a".into();},
@@ -375,7 +395,6 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
         self.status = "Offline".into();
         self.error = None;
         self.search.clear();
-        self.token.zeroize();
         self.features.clear();self.feature_errors.clear();self.feature_pending.clear();self.server=Default::default();self.voice.clear();self.voice_lookups.clear();self.friends.clear();self.profile=None;self.account_edit=serde_json::Value::Null;self.settings_edit=serde_json::Value::Null;self.server_edit=serde_json::Value::Null;self.logs.clear();self.reply=None;self.read_latest.clear();self.confirm=None;self.home=Home::Chat;
     }
     fn send_command(&mut self, command: Command) -> bool {
@@ -556,6 +575,9 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                 Event::ProfilePatch(kind, data) => self.profile_patch(&kind, &data),
                 Event::Connected(user, guilds, dms) => {
                     self.connecting = false;
+                    if let Some(token) = self.pending_save.take() { crate::login::saved::save(&token); }
+                    self.auto_login = false;
+                    self.login_ui = Default::default();
                     self.user = Some(user);
                     self.guilds = guilds;
 
@@ -696,6 +718,12 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                 Event::Gateway(status) => self.status = status,
                 Event::Error(error) => {
                     self.picker.pending = false;
+                    if self.connecting {
+                        self.pending_save = None;
+                        // A saved session Discord no longer accepts is forgotten so the sign-in screen shows.
+                        if self.auto_login && error.contains("rejected the token") { crate::login::saved::delete(); }
+                        self.auto_login = false;
+                    }
                     self.connecting = false;
                     self.error = Some(error);
                 }
@@ -784,11 +812,11 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             .frame(egui::Frame::NONE.fill(preferences_bg(&self.prefs)))
             .show(ctx, |ui| {
                 let width = ui.available_width();
-                ui.add_space((ui.available_height() - 530.0).max(30.0) / 2.0);
+                ui.add_space((ui.available_height() - 640.0).max(12.0) / 2.0);
                 ui.horizontal(|ui| {
-                    ui.add_space(((width - 510.0) / 2.0).max(20.0));
+                    ui.add_space(((width - 640.0) / 2.0).max(20.0));
                     ui.vertical(|ui| {
-                        ui.set_width(490.0);
+                        ui.set_width((width - 40.0).min(620.0));
                         ui.horizontal(|ui| {
                             eclipse_mark(ui, 38.0);
                             ui.label(RichText::new("ECLIPSE").size(17.0).strong().color(self.accent()));
@@ -809,65 +837,10 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         egui::Frame::NONE
                             .fill(CARD)
                             .corner_radius(12)
-                            .inner_margin(22)
+                            .inner_margin(18)
                             .show(ui, |ui| {
-                                ui.set_width(446.0);
-                                ui.label(RichText::new("Connect your account").size(20.0).strong());
-                                ui.add_space(8.0);
-                                ui.label(
-                                    RichText::new("Personal account token")
-                                        .color(MUTED)
-                                        .size(13.0),
-                                );
-                                ui.add_enabled(
-                                    !self.connecting,
-                                    egui::TextEdit::singleline(&mut self.token)
-                                        .password(true)
-                                        .hint_text("Paste your own token")
-                                        .desired_width(f32::INFINITY),
-                                );
-                                ui.label(
-                                    RichText::new(
-                                        "Session only. Your token is never saved to disk.",
-                                    )
-                                    .size(12.0)
-                                    .color(MUTED),
-                                );
-                                ui.add_space(9.0);
-                                ui.label(
-                                    RichText::new(
-                                        "Unofficial account access is not supported by Discord.",
-                                    )
-                                    .size(12.0)
-                                    .color(MUTED),
-                                );
-                                ui.add_space(8.0);
-                                if ui
-                                    .add_enabled(
-                                        !self.connecting && !self.token.is_empty(),
-                                        primary(if self.connecting {
-                                            "Connecting…"
-                                        } else {
-                                            "Connect to Discord"
-                                        }),
-                                    )
-                                    .clicked()
-                                {
-                                    match normalize_token(&self.token) {
-                                        Ok(token) => {
-                                            self.backend = Some(backend::start(token, ctx.clone()));
-                                            self.token.zeroize();
-                                            self.connecting = true;
-                                            self.error = None;
-                                            self.status = "Connecting…".into();
-                                        }
-                                        Err(error) => self.error = Some(error),
-                                    }
-                                }
-                                if let Some(error) = &self.error {
-                                    ui.add_space(7.0);
-                                    ui.colored_label(Color32::from_rgb(255, 160, 151), error);
-                                }
+                                ui.set_width(ui.available_width());
+                                self.login_card(ui, ctx);
                             });
                         ui.add_space(13.0);
                         if ui.button("Explore offline preview").clicked() {
@@ -1058,8 +1031,12 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
         }
     }
     fn paint_image(&mut self, ui: &egui::Ui, rect: egui::Rect, url: Option<String>, radius: u8) {
+        self.paint_image_playing(ui,rect,url,radius,false);
+    }
+    /// `always` keeps an animated image playing without hover (the selected server icon).
+    fn paint_image_playing(&mut self, ui: &egui::Ui, rect: egui::Rect, url: Option<String>, radius: u8, always: bool) {
         if ui.is_rect_visible(rect) {
-            if let Some(id) = url.and_then(|url| self.images.texture_hover(&url,rect, ui.ctx())) {
+            if let Some(id) = url.and_then(|url| self.images.texture_playing(&url,rect, ui.ctx(), always)) {
                 ui.painter().rect_filled(rect, radius, CARD);
                 egui::Image::new((id, rect.size()))
                     .corner_radius(radius)
@@ -1078,6 +1055,11 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
     }
     /// Chat avatars omit the presence badge; lists and profiles keep it.
     fn avatar_with_status(&mut self,ui:&mut egui::Ui,user:&User,member_avatar:Option<&str>,size:f32,show_status:bool){
+        let response=self.paint_avatar(ui,user,member_avatar,size,show_status);
+        response.context_menu(|ui|self.user_menu(ui,user));if response.clicked(){self.toggle_profile_at(user,response.rect); }
+    }
+    /// A clickable avatar with decoration and (optionally) presence badge; callers decide what a click does.
+    fn paint_avatar(&mut self,ui:&mut egui::Ui,user:&User,member_avatar:Option<&str>,size:f32,show_status:bool)->egui::Response{
         let (rect,response) = avatar_response(ui, user.name(), size,egui::Sense::click());
         let url = if self.preview {
             Some(format!("demo://user/{}", user.id))
@@ -1087,10 +1069,9 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
         self.paint_image(ui, rect, url, (size / 2.0) as u8);
         let status = self.presences.get(&user.id, self.guild.as_deref());
         let mut decorated=user.clone();if self.guild.as_deref()==Some(&self.server.id){if let Some(decoration)=self.server.members.get(&user.id).and_then(|m|m.avatar_decoration_data.clone()){decorated.avatar_decoration_data=Some(decoration);}}
-        crate::identity::paint_art(ui,&mut self.images,rect.expand(size*0.1),crate::identity::decoration(&decorated),0);
+        crate::identity::paint_art_playing(ui,&mut self.images,rect.expand(size*0.1),crate::identity::decoration(&decorated),0);
         if show_status{crate::presence::badge(ui, rect, status);}
-        let response=if show_status{response.on_hover_text(status.label())}else{response};
-        response.context_menu(|ui|self.user_menu(ui,user));if response.clicked(){self.toggle_profile_at(user,response.rect); }
+        if show_status{response.on_hover_text(status.label())}else{response}
     }
     fn guild_button(&mut self, ui: &mut egui::Ui, guild: &Guild) {
         let selected = self.guild.as_deref() == Some(&guild.id);
@@ -1101,11 +1082,12 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
         let radius=if selected{14}else{22};
         ui.painter().rect_filled(rect,radius,if selected{self.accent()}else{CARD});
         ui.painter().text(rect.center(),egui::Align2::CENTER_CENTER,initials_of(&guild.name),egui::FontId::proportional(14.0),if selected{SIDE}else{MUTED});
-        self.paint_image(
+        self.paint_image_playing(
             ui,
             rect,
             self.guild_image_url(guild),
             radius,
+            selected,
         );
         if selected {
             ui.painter().rect_stroke(
@@ -1203,7 +1185,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
         if selected || response.hovered() {
             ui.painter().rect_filled(rect, 20, CARD);
         }
-        if let Some(user)=channel.recipients.first().filter(|_|channel.kind==1){crate::identity::paint_art(ui,&mut self.images,rect,crate::identity::nameplate(user),8);}
+        if let Some(user)=channel.recipients.first().filter(|_|channel.kind==1){crate::identity::paint_art_playing(ui,&mut self.images,rect,crate::identity::nameplate(user),8);}
         let icon = egui::Rect::from_min_size(rect.min + Vec2::new(7.0, 5.0), Vec2::splat(30.0));
         let label = channel.label();
         ui.painter()
@@ -1233,7 +1215,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             })
         };
         self.paint_image(ui, icon, url, 15);
-        if let Some(user)=channel.recipients.first().filter(|_|channel.kind==1){crate::identity::paint_art(ui,&mut self.images,icon.expand(3.),crate::identity::decoration(user),0);}
+        if let Some(user)=channel.recipients.first().filter(|_|channel.kind==1){crate::identity::paint_art_playing(ui,&mut self.images,icon.expand(3.),crate::identity::decoration(user),0);}
         let text = if unread > 0 {
             format!("{label}  {unread}")
         } else {
@@ -1289,17 +1271,23 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                             if ui.button("Members & Roles").clicked(){self.open_server_settings();self.server_page="Members".into();self.load_server_page();ui.close();}
                             if ui.button("Notification Settings").clicked(){self.open_server_settings();self.server_page="Notifications".into();self.load_server_page();ui.close();}
                         });
-                    }else{ui.horizontal(|ui|{eclipse_mark(ui,23.);ui.label(RichText::new(name).size(18.).strong());});}
+                    }else{
+                        // Conversation search at the top, like Discord. The placeholder clears while focused and
+                        // returns when focus leaves an empty box.
+                        let id=egui::Id::new("dm-conversation-search");
+                        let focused=ui.memory(|m|m.has_focus(id));
+                        ui.scope(|ui|{ui.visuals_mut().extreme_bg_color=CARD;
+                            ui.add(egui::TextEdit::singleline(&mut self.channel_filter).id(id).hint_text(RichText::new(if focused{""}else{"Find A Conversation"}).size(15.)).horizontal_align(egui::Align::Center).desired_width(f32::INFINITY).margin(Vec2::new(9.0,7.0)));
+                        });
+                    }
                     ui.add_space(if self.guild.is_some(){8.0}else{4.0});
                     ui.separator();
                     ui.add_space(if self.guild.is_some(){4.0}else{0.0});
                     if self.guild.is_none(){
                         ui.scope(|ui|{ui.spacing_mut().item_spacing.y=1.0;
                             for(home,label)in[(Home::Friends,"Friends"),(Home::Nitro,"Nitro"),(Home::Shop,"Shop"),(Home::Quests,"Quests")]{if crate::widgets::home_row(ui,label,self.home==home,if self.home==home{TEXT}else{MUTED}).clicked(){self.navigate_home(home);}}
-                            ui.add_space(1.0);ui.separator();ui.add_space(1.0);
-                            ui.add(egui::TextEdit::singleline(&mut self.channel_filter).hint_text("Find a conversation").desired_width(f32::INFINITY).margin(Vec2::new(9.0,6.0)));
                         });
-                        ui.add_space(-3.0);
+                        ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.label(RichText::new("Direct messages").size(12.0).color(MUTED).strong());
                             let plus=ui.small_button("+").on_hover_text("Find a friend or server member");
@@ -1308,7 +1296,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     }
                     egui::ScrollArea::vertical()
                         .id_salt("channels")
-                        .max_height((channel_height-if self.guild.is_some(){85.0}else{255.0}).max(70.0))
+                        .max_height((channel_height-if self.guild.is_some(){85.0}else{229.0}).max(70.0))
                         .show(ui, |ui| {
                             if self.guild.is_some(){ui.spacing_mut().item_spacing.y=3.0;}
                             for channel in self.channels.clone() {
@@ -1513,7 +1501,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                 egui::ScrollArea::vertical().id_salt("member-list").max_height(height-20.).show(ui,|ui|{ui.spacing_mut().item_spacing.y=4.0;let mut previous=String::new();let search=self.search.to_lowercase();for member in members.iter().filter(|m|m.name().to_lowercase().contains(&search)||m.user.username.to_lowercase().contains(&search)).cloned().collect::<Vec<_>>(){
                     let offline=matches!(self.presences.get(&member.user.id,self.guild.as_deref()),crate::presence::Status::Offline);let role=self.server.roles.iter().filter(|r|r.hoist&&member.roles.contains(&r.id)).max_by_key(|r|r.position);let group=if offline{"OFFLINE".into()}else{role.map(|r|r.name.to_uppercase()).unwrap_or("ONLINE".into())};if group!=previous{ui.add_space(8.);ui.label(RichText::new(&group).size(10.).strong().color(MUTED));previous=group;}
                     let color=if self.prefs.role_colors{self.server.color(&member.user.id).unwrap_or(TEXT)}else{TEXT};
-                    let response=egui::Frame::NONE.fill(Color32::TRANSPARENT).corner_radius(7).inner_margin(4).show(ui,|ui|{ui.spacing_mut().item_spacing.y=2.0;ui.set_min_width(ui.available_width());ui.set_min_height(34.0);let plate=egui::Rect::from_min_size(ui.cursor().min,Vec2::new(ui.available_width(),34.));crate::identity::paint_art(ui,&mut self.images,plate,crate::identity::nameplate(&member.user),7);ui.horizontal(|ui|{self.user_avatar(ui,&member.user,member.avatar.as_deref(),30.);ui.vertical(|ui|{ui.set_max_width(ui.available_width());let name=crate::identity::name(ui,&member.user,member.name(),14.,color);if name.clicked(){self.toggle_profile_at(&member.user,name.rect);}ui.label(RichText::new(self.presences.get(&member.user.id,self.guild.as_deref()).label()).size(10.).color(MUTED));});});}).response.interact(egui::Sense::click());response.context_menu(|ui|self.user_menu(ui,&member.user));if response.clicked(){self.toggle_profile_at(&member.user,response.rect);}
+                    let response=egui::Frame::NONE.fill(Color32::TRANSPARENT).corner_radius(7).inner_margin(4).show(ui,|ui|{ui.spacing_mut().item_spacing.y=2.0;ui.set_min_width(ui.available_width());ui.set_min_height(34.0);let plate=egui::Rect::from_min_size(ui.cursor().min,Vec2::new(ui.available_width(),34.));crate::identity::paint_art_playing(ui,&mut self.images,plate,crate::identity::nameplate(&member.user),7);ui.horizontal(|ui|{self.user_avatar(ui,&member.user,member.avatar.as_deref(),30.);ui.vertical(|ui|{ui.set_max_width(ui.available_width());let name=crate::identity::name(ui,&member.user,member.name(),14.,color);if name.clicked(){self.toggle_profile_at(&member.user,name.rect);}ui.label(RichText::new(self.presences.get(&member.user.id,self.guild.as_deref()).label()).size(10.).color(MUTED));});});}).response.interact(egui::Sense::click());response.context_menu(|ui|self.user_menu(ui,&member.user));if response.clicked(){self.toggle_profile_at(&member.user,response.rect);}
                 }if self.guild.is_some()&&self.server.has_more&&self.server.members.len()<crate::community::MEMBER_LIMIT&&ui.button("Load more members").clicked(){let guild=self.server.id.clone();let after=self.server.cursor.clone().unwrap_or_default();self.request_feature(&format!("members:{guild}"),format!("/guilds/{guild}/members?limit=100&after={after}"));}});
             });
         });
@@ -2294,7 +2282,9 @@ mod interaction_tests {
         let category=labels.iter().find(|t|t.galley.job.text=="Community").expect("first channel category");let header=ctx.read_response(egui::Id::new("server-header-click")).unwrap().rect;
         assert!(category.visual_bounding_rect().top()-header.bottom()<60.0,"channel list must move up");
         app.guild=None;app.channels=app.dms.clone();
-        let output=ctx.run(input(vec![]),|ctx|{app.left_column(ctx);});assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t)if t.galley.job.text=="Find a conversation")));
+        let output=ctx.run(input(vec![]),|ctx|{app.left_column(ctx);});let texts:Vec<_>=output.shapes.iter().filter_map(|s|if let egui::Shape::Text(t)=&s.shape{Some(t.galley.job.text.clone())}else{None}).collect();
+        // The search bar sits at the top and the old separate box under Quests is gone.
+        assert_eq!(texts.iter().filter(|t|t.as_str()=="Find A Conversation").count(),1,"{texts:?}");assert!(!texts.iter().any(|t|t=="Find a conversation"));
     }
     #[test]fn member_panel_has_no_count_or_search_and_header_search_names_the_server(){
         let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);app.show_members=true;app.prefs.member_count=true;

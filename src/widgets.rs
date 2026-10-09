@@ -18,7 +18,7 @@ pub fn chevron(ui:&mut egui::Ui,height:f32,tooltip:&str)->egui::Response{
     ui.painter().line_segment([c+Vec2::new(-3.5,-1.5),c+Vec2::new(0.,2.)],stroke);ui.painter().line_segment([c+Vec2::new(0.,2.),c+Vec2::new(3.5,-1.5)],stroke);
     response.on_hover_text(tooltip)
 }
-#[derive(Clone,Copy)]pub enum HeaderIcon {Pin,People,Message,Profile}
+#[derive(Clone,Copy)]pub enum HeaderIcon {Pin,People,Message,Profile,Edit}
 /// Small borderless conversation-header icon; `color` lets callers show an active state.
 pub fn header_icon(ui:&mut egui::Ui,kind:HeaderIcon,color:Color32,tooltip:&str)->egui::Response{
     let size=28.;let (rect,response)=ui.allocate_exact_size(Vec2::splat(size),egui::Sense::click());
@@ -34,7 +34,7 @@ pub fn round_icon(ui:&mut egui::Ui,kind:HeaderIcon,tooltip:&str)->egui::Response
     paint_icon(ui.painter(),rect.center(),0.72,kind,egui::Stroke::new(1.6_f32,Color32::from_gray(if response.hovered(){245}else{200})));
     response.on_hover_text(tooltip)
 }
-fn paint_icon(painter:&egui::Painter,center:egui::Pos2,unit:f32,kind:HeaderIcon,stroke:egui::Stroke){
+pub fn paint_icon(painter:&egui::Painter,center:egui::Pos2,unit:f32,kind:HeaderIcon,stroke:egui::Stroke){
     let p=|x:f32,y:f32|center+Vec2::new(x,y)*unit;
     let arc=|cx:f32,cy:f32,r:f32,from:f32,to:f32|(0..=12).map(|i|{let a=from+(to-from)*i as f32/12.;p(cx+r*a.cos(),cy+r*a.sin())}).collect::<Vec<_>>();
     use std::f32::consts::{PI,TAU};
@@ -54,6 +54,7 @@ fn paint_icon(painter:&egui::Painter,center:egui::Pos2,unit:f32,kind:HeaderIcon,
             painter.line_segment([p(-8.,8.),p(1.+8.*(0.6*PI).cos(),-1.+8.*(0.6*PI).sin())],stroke);
         },
         HeaderIcon::Profile=>{painter.circle_stroke(p(0.,-4.),4.*unit,stroke);painter.add(egui::Shape::line(arc(0.,9.,7.,PI,TAU),stroke));},
+        HeaderIcon::Edit=>{for (a,b) in [((-9.,9.),(-6.,1.)),((-6.,1.),(6.,-11.)),((6.,-11.),(11.,-6.)),((11.,-6.),(-1.,6.)),((-1.,6.),(-9.,9.)),((3.,-8.),(8.,-3.))]{painter.line_segment([p(a.0,a.1),p(b.0,b.1)],stroke);}},
     }
 }
 pub fn control_at(ui:&mut egui::Ui,rect:egui::Rect,id:egui::Id,kind:Control,tooltip:&str)->egui::Response{

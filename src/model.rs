@@ -178,17 +178,6 @@ pub fn history(messages: Vec<Message>) -> VecDeque<Message> {
     result
 }
 
-pub fn normalize_token(input: &str) -> Result<String, String> {
-    let token = input.trim();
-    if token.is_empty() {
-        return Err("Paste your own account token to connect.".into());
-    }
-    if token.chars().any(char::is_whitespace) || token.contains('"') || token.len() < 20 {
-        return Err("The token contains unexpected characters or is too short.".into());
-    }
-    Ok(token.to_owned())
-}
-
 pub fn safe_link(link: &str) -> bool {
     reqwest::Url::parse(link).is_ok_and(|u| matches!(u.scheme(), "http" | "https"))
 }
@@ -394,14 +383,5 @@ mod tests {
         ] {
             assert!(!safe_link(link));
         }
-    }
-    #[test]
-    fn validates_token_without_changing_it() {
-        assert_eq!(
-            normalize_token("  abcdefghijklmnopqrstuvwxyz  ").unwrap(),
-            "abcdefghijklmnopqrstuvwxyz"
-        );
-        assert!(normalize_token("Bot abcdefghijklmnopqrstuvwxyz").is_err());
-        assert!(normalize_token("\"").is_err());
     }
 }
