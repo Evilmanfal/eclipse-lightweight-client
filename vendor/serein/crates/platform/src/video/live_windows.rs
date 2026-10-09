@@ -343,17 +343,31 @@ fn nv12_to_rgba(bytes: &[u8], format: OutputFormat) -> Result<Frame, &'static st
 	// 8-bit fixed point (Eclipse): the float version called a rounding function three times
 	// per pixel, about 6.5 ms per 720p picture; this is about 2.5 ms and within one level.
 	let channel = |value: i32| (value >> 8).clamp(0, 255) as u8;
-	for y in 0..out_height {
-		let luma_row = &luma[(y0 + y) * stride..];
-		let chroma_row = &chroma[((y0 + y) / 2) * stride..];
-		let out = &mut rgba[y * width * 4..(y + 1) * width * 4];
-		for (x, pixel) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-			let sx = x0 + x;
-			let c = 298 * (i32::from(luma_row[sx]) - 16) + 128;
-			let d = i32::from(chroma_row[(sx / 2) * 2]) - 128;
-			let e = i32::from(chroma_row[(sx / 2) * 2 + 1]) - 128;
-			*pixel = [channel(c + 409 * e), channel(c - 100 * d - 208 * e), channel(c + 516 * d), 255];
+	let convert = |first_row: usize, out: &mut [u8]| {
+		for (row, out) in out.chunks_exact_mut(width * 4).enumerate() {
+			let y = first_row + row;
+			let luma_row = &luma[(y0 + y) * stride..];
+			let chroma_row = &chroma[((y0 + y) / 2) * stride..];
+			for (x, pixel) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+				let sx = x0 + x;
+				let c = 298 * (i32::from(luma_row[sx]) - 16) + 128;
+				let d = i32::from(chroma_row[(sx / 2) * 2]) - 128;
+				let e = i32::from(chroma_row[(sx / 2) * 2 + 1]) - 128;
+				*pixel = [channel(c + 409 * e), channel(c - 100 * d - 208 * e), channel(c + 516 * d), 255];
+			}
 		}
+	};
+	// Large pictures (720p and up, so 1080p60 keeps up) are converted in four bands at once.
+	if width * out_height >= 1280 * 720 && out_height >= 4 {
+		let band = out_height.div_ceil(4);
+		std::thread::scope(|scope| {
+			for (index, out) in rgba.chunks_mut(band * width * 4).enumerate() {
+				let convert = &convert;
+				scope.spawn(move || convert(index * band, out));
+			}
+		});
+	} else {
+		convert(0, &mut rgba);
 	}
 	Ok(Frame {
 		width: format.crop.2,
