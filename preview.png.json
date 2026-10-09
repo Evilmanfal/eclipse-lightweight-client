@@ -8,7 +8,7 @@
     "mode":  "offline_preview",
     "peak_working_set_mb":  203.13671875,
     "private_commit_mb":  220.12890625,
-    "screenshot_saved":  false,
+    "screenshot_saved":  true,
     "working_set_mb":  203.13671875,
     "executable_sha256":  "7655a6365750cf7efb7053d706063ce62c89f55fb2912637c78876ff1d69795f"
 }
