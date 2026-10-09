@@ -531,7 +531,7 @@ impl Calls {
             },
         )?));
         // Set the microphone gate before transport can report media readiness.
-        if let Ok(audio)=audio.lock(){audio.set_input_enabled(true);audio.set_controls(self.muted||self.server_muted||!hotkey_open(self.ptt.load(Ordering::Acquire),key_down),self.deafened||self.server_deafened);audio.set_gain(self.prefs.input_gain,self.prefs.output_gain);audio.set_processing(effective_processing(&self.prefs));}
+        if let Ok(audio)=audio.lock(){audio.set_input_enabled(true);audio.set_controls(self.muted||self.server_muted,self.deafened||self.server_deafened);audio.set_hold(!hotkey_open(self.ptt.load(Ordering::Acquire),key_down));audio.set_gain(self.prefs.input_gain,self.prefs.output_gain);audio.set_processing(effective_processing(&self.prefs));}
         let identity = voice::Identity::generate();
         let shared_identity = identity.clone();
         let (control_send, controls) = tokio::sync::watch::channel(Controls::default());
@@ -602,12 +602,13 @@ impl Calls {
         });
         if let Some(media)=&self.media {
             let weak=Arc::downgrade(&media.audio);let stop=media.ptt_stop.clone();let config=self.ptt.clone();let bits=self.control_bits.clone();
-            // Push to talk gates the always-open microphone like mute does. Toggling the input
-            // device itself reopened the audio streams on every press, delaying speech.
+            // Push to talk holds back the always-open microphone without muting it: muting reset
+            // echo cancellation and noise suppression on every press, so each press began with
+            // static and short phrases sounded muffled. Toggling the device itself was slower still.
             std::thread::spawn(move||{let mut last=None;while !stop.load(Ordering::Acquire){
                 let Some(shared)=weak.upgrade()else{return;};
                 let settings=config.load(Ordering::Acquire);let open=hotkey_open(settings,key_down);let state=bits.load(Ordering::Acquire);let(muted,deafened)=(state&1!=0,state&2!=0);
-                if let Ok(audio)=shared.lock(){audio.set_controls(muted||!open,deafened);}drop(shared);
+                if let Ok(audio)=shared.lock(){audio.set_controls(muted,deafened);audio.set_hold(!open);}drop(shared);
                 if settings&(1<<16)!=0&&!muted&&!deafened&&last.is_some_and(|was|was!=open){crate::sounds::play(if open{crate::sounds::Cue::PttOn}else{crate::sounds::Cue::PttOff},state&4!=0);}
                 last=Some(open);std::thread::sleep(Duration::from_millis(4));
             }});
@@ -1163,7 +1164,8 @@ impl Calls {
             });
             self.control_bits.store(muted as u8|(deafened as u8)<<1|(self.prefs.ui_sounds as u8)<<2,Ordering::Release);
             if let Ok(audio) = media.audio.lock() {
-                audio.set_controls(muted||!hotkey_open(self.ptt.load(Ordering::Acquire),key_down), deafened);
+                audio.set_controls(muted, deafened);
+                audio.set_hold(!hotkey_open(self.ptt.load(Ordering::Acquire),key_down));
             }
         }
     }

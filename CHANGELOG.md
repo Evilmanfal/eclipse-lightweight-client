@@ -1,5 +1,6 @@
 # Unreleased
 
+- Push to talk sounds clean from the first word: releasing the key now only stops sending, instead of muting, which restarted echo cancellation and noise suppression on every press (static at the start, muffled short phrases).
 - Share your screen while watching someone else's stream (no more "Stop watching" call error).
 - Watch your own stream: your call tile shows what you're sharing (960x540, 30 fps) with View Your Stream to see it large, full screen or enlarged.
 - Stream preview pictures: live friends' call tiles show a preview of their stream behind Watch Stream, and hovering a live friend under a voice channel shows it too; previews refresh every minute. Your own stream uploads a preview every minute, which you can turn off with "Show a preview of my stream" in the Screen Share dialog. The dialog also remembers your resolution and frame rate.
