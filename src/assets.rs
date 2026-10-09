@@ -577,7 +577,8 @@ impl Images {
         self.clock = self.clock.wrapping_add(1);
         if let Some(texture) = self.textures.get_mut(key) {
             texture.used = self.clock;
-            if self.animate && texture.data.frames.len() > 1 {
+            // An unfocused window holds every animation, GIFs included, on its current frame.
+            if self.animate && texture.data.frames.len() > 1 && ctx.input(|i|i.focused) {
                 // One texture can be drawn in several places. It plays if any of them
                 // asked during this pass or the previous one, so draw order does not matter.
                 let pass = ctx.cumulative_pass_nr();
@@ -853,6 +854,26 @@ mod tests {
         assert!(long.frames.len() <= FRAME_LIMIT);
         assert_eq!(long.duration, Duration::from_secs(75));
         assert!(long.sampled);
+    }
+    #[test]
+    fn unfocused_window_pauses_all_animations() {
+        let ctx = egui::Context::default();
+        let mut cache = Images::new(&ctx);
+        let frames = (0..4).map(|i| Frame { image: demo_image("pause", i as f32, 8), delay: Duration::from_millis(20) }).collect();
+        cache.insert(&ctx, "gif".into(), Decoded::new(frames, false).unwrap());
+        let mut step = |focused: bool| {
+            let _ = ctx.run(egui::RawInput { focused, ..Default::default() }, |ctx| { cache.texture_key("gif", ctx, true); });
+            thread::sleep(Duration::from_millis(10));
+            cache.textures["gif"].playback.elapsed
+        };
+        step(true);
+        let playing = step(true);
+        assert!(playing > Duration::ZERO);
+        let paused = step(false);
+        assert_eq!(step(false), paused);
+        assert_eq!(step(false), paused);
+        step(true);
+        assert!(step(true) > paused);
     }
     #[test]
     fn cache_evicts_old_images_and_discards_inflight_images_after_clear() {

@@ -79,7 +79,7 @@ pub fn name(ui: &mut egui::Ui, user: &User, label: &str, size: f32, fallback: Co
     let effect = data["effect_id"].as_u64().unwrap_or(1);
     // Name effects move only while the pointer is over the name (last pass's response).
     let hovered = ui.ctx().read_response(ui.next_auto_id()).is_some_and(|r|r.hovered());
-    let animated = hovered && ui.ctx().data(|d|d.get_temp::<bool>(egui::Id::new("eclipse-name-animation")).unwrap_or(true)) && matches!(effect, 7 | 8);
+    let animated = hovered && ui.ctx().input(|i|i.focused) && ui.ctx().data(|d|d.get_temp::<bool>(egui::Id::new("eclipse-name-animation")).unwrap_or(true)) && matches!(effect, 7 | 8);
     let t = if animated { ui.ctx().input(|i|i.time) as f32 * 0.25 } else { 0. };
     let mut job = egui::text::LayoutJob::default();
     let count = label.chars().count().max(1) as f32;

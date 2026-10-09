@@ -1,6 +1,7 @@
 # Eclipse 0.8 — October 8, 2026
 
 - Animated avatars, server icons, emoji, banners, profile effects, shop artwork and name effects play only while hovered and return to their first frame afterward. GIFs in chat and in the GIF picker still play automatically.
+- All animations, GIFs included, pause on their current frame while the Eclipse window is not focused and continue when it regains focus.
 - Emoji and GIF pickers attach above their composer buttons, follow resizing/zooming and dismiss on outside click, Escape, × or toggling the button.
 - Ctrl+wheel zoom with a saved 75–150% scale; Ctrl+0 resets. Side panels adapt at higher zoom.
 - Less padding around the chat, composer and settings; tighter message spacing.
