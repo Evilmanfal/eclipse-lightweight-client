@@ -68,7 +68,7 @@ impl Eclipse {
         if ui.button("Copy text").clicked(){ui.ctx().copy_text(message.content.clone());ui.close();}
         ui.menu_button("Add reaction",|ui|{for emoji in ["👍","❤️","😂","🎉","👀","✅"]{if ui.button(emoji).clicked(){self.react(message,emoji.into(),false);ui.close();}}});
         let mine=self.user.as_ref().is_some_and(|u|u.id==message.author.id);let actor=self.user.as_ref().map(|u|u.id.as_str()).unwrap_or("");let can_manage=self.guild.is_some()&&self.server.can(actor,13);
-        if mine&&ui.button("Edit message").clicked(){self.edit=Some((message.id.clone(),message.content.clone()));ui.close();}
+        if mine&&ui.button("Edit message").clicked(){self.start_edit(message);ui.close();}
         if (mine||can_manage)&&ui.button(RichText::new("Delete message").color(Color32::LIGHT_RED)).clicked(){self.delete=Some(message.id.clone());ui.close();}
         if (can_manage||self.channel.as_ref().is_some_and(|c|c.guild_id.is_none()))&&ui.button(if message.pinned{"Unpin message"}else{"Pin message"}).clicked(){self.mutate("pin-message",if message.pinned{Method::DELETE}else{Method::PUT},format!("/channels/{}/messages/pins/{}",message.channel_id,message.id),None);ui.close();}
         if ui.button("Mark unread").clicked(){let previous=message.id.parse::<u64>().ok().and_then(|n|n.checked_sub(1));if let Some(id)=previous{self.mutate("mark-unread",Method::POST,format!("/channels/{}/messages/{id}/ack",message.channel_id),Some(json!({"manual":true,"mention_count":1})));}ui.close();}
@@ -78,7 +78,7 @@ impl Eclipse {
     pub(in crate::ui) fn message_click(&mut self,response:&egui::Response,message:&Message){
         if !self.prefs.click_actions{return;}
         if response.double_clicked(){self.reply=Some(message.clone());}
-        if response.clicked(){let modifiers=response.ctx.input(|i|i.modifiers);if modifiers.ctrl{response.ctx.copy_text(message.content.clone());}else if modifiers.alt&&self.user.as_ref().is_some_and(|u|u.id==message.author.id){self.edit=Some((message.id.clone(),message.content.clone()));}}
+        if response.clicked(){let modifiers=response.ctx.input(|i|i.modifiers);if modifiers.ctrl{response.ctx.copy_text(message.content.clone());}else if modifiers.alt&&self.user.as_ref().is_some_and(|u|u.id==message.author.id){self.start_edit(message);}}
     }
     pub(in crate::ui) fn quick_message_actions(&mut self,ui:&mut egui::Ui,response:&egui::Response,message:&Message){
         if !ui.input(|i|i.modifiers.shift)||!ui.rect_contains_pointer(response.rect){return;}
@@ -93,10 +93,20 @@ impl Eclipse {
         let id=egui::Id::new(("message-actions",&message.channel_id,&message.id));
         if mine{
             let button=egui::Rect::from_min_size(rect.min+Vec2::splat(2.0),Vec2::splat(28.0));
-            if crate::widgets::control_at(ui,button,id.with("edit"),crate::widgets::Control::Edit,"Edit message").clicked(){self.edit=Some((message.id.clone(),message.content.clone()));}
+            if crate::widgets::control_at(ui,button,id.with("edit"),crate::widgets::Control::Edit,"Edit message").clicked(){self.start_edit(message);}
         }
         let button=egui::Rect::from_min_size(egui::pos2(rect.right()-30.0,rect.top()+2.0),Vec2::splat(28.0));
-        if crate::widgets::control_at(ui,button,id.with("delete"),crate::widgets::Control::Delete,"Delete message").clicked(){self.delete=Some(message.id.clone());}
+        if crate::widgets::control_at(ui,button,id.with("delete"),crate::widgets::Control::Delete,"Delete message").clicked(){self.delete_now(&message.channel_id,&message.id);}
+    }
+    /// Edits happen in place inside the message, like Discord: Enter saves, Esc cancels.
+    pub(in crate::ui) fn start_edit(&mut self,message:&Message){
+        self.edit=Some((message.id.clone(),message.content.clone()));self.focus_edit=true;
+    }
+    /// Deletes without asking; the Shift quick-delete button uses this directly.
+    pub(in crate::ui) fn delete_now(&mut self,channel:&str,id:&str){
+        if self.preview{self.messages.retain(|m|m.id!=id);}
+        else{self.send_command(Command::Delete{channel:channel.to_owned(),id:id.to_owned()});}
+        if self.edit.as_ref().is_some_and(|(editing,_)|editing==id){self.edit=None;}
     }
     pub(in crate::ui) fn channel_menu(&mut self,ui:&mut egui::Ui,channel:&Channel){
         if let Some(last)=self.read_latest.get(&channel.id).cloned(){if ui.button("Mark as read").clicked(){self.mutate("channel-read",Method::POST,format!("/channels/{}/messages/{last}/ack",channel.id),Some(json!({"token":null})));ui.close();}}

@@ -60,7 +60,9 @@ pub struct Eclipse {
     search: String,
     channel_filter: String,
     settings: bool,
+    /// The message being edited in place, and its edited text.
     edit: Option<(String, String)>,
+    focus_edit: bool,
     delete: Option<String>,
     pins: Option<Vec<Message>>,
     pins_anchor: Option<egui::Rect>,
@@ -213,6 +215,7 @@ impl Eclipse {
             channel_filter: String::new(),
             settings: false,
             edit: None,
+            focus_edit: false,
             delete: None,
             pins: None,
             pins_anchor: None,
@@ -347,6 +350,7 @@ impl Eclipse {
             "link-preview"=>{if let (Some(user),Some(last))=(self.user.clone(),self.messages.back().cloned()){let link="https://stremio-addons.net/addons/magnetflix";let mut message=Message{id:"link-preview".into(),author:user,content:link.into(),..last};message.referenced_message=None;message.reactions.clear();message.attachments.clear();message.embeds=vec![crate::model::Embed{kind:"rich".into(),title:Some("Magnetflix".into()),description:Some("Addon de filmes, séries e animes dublados e legendados em Português (PT-BR)".into()),url:Some(link.into()),color:Some(0xb06cf0),provider:Some(crate::model::EmbedName{name:Some("Stremio Addons".into()),url:None}),..Default::default()}];self.messages.push_back(message);}},
             "update-prompt"=>self.updater.preview(false),
             "update-button"=>self.updater.preview(true),
+            "inline-edit"=>{if let (Some(user),Some(message))=(self.user.clone(),self.messages.back_mut()){message.author=user;let message=message.clone();self.start_edit(&message);}},
             "zoom-in"=>self.prefs.zoom=1.5,
             "zoom-out"=>self.prefs.zoom=0.75,
             "compact"=>self.prefs.compact=true,
@@ -1643,7 +1647,9 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                             if deleted {ui.label(RichText::new("Deleted").size(10.).color(LOG_RED));}
                             else if message.edited_timestamp.is_some() || !versions.is_empty() {ui.label(RichText::new("Edited").size(10.).color(if logged{LOG_RED}else{MUTED}));}
                         });
-                        if !message.content.is_empty() {
+                        if self.edit.as_ref().is_some_and(|(id,_)|*id==message.id) {
+                            self.inline_editor(ui,message);
+                        } else if !message.content.is_empty() {
                             let display=self.prefs.display(&crate::message_media::visible_content(message,self.prefs.images));
                             ui.scope(|ui|{if logged{ui.visuals_mut().override_text_color=Some(LOG_RED);}
                                 for response in crate::message_media::body(ui, &mut self.images, &display){if deleted{response.context_menu(|ui|{if ui.button("Copy deleted text").clicked(){ui.ctx().copy_text(message.content.clone());ui.close();}});}else{response.context_menu(|ui|self.message_menu(ui,message));self.message_click(&response,message);}}
@@ -1734,6 +1740,53 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             );
         }
         if deleted{response.context_menu(|ui|{if ui.button("Copy deleted text").clicked(){ui.ctx().copy_text(message.content.clone());ui.close();}});}else{response.context_menu(|ui|self.message_menu(ui,message));self.message_click(&response,message);self.quick_message_actions(ui,&response,message);}
+    }
+    /// Discord-style editing in place: an outlined box where the message text was, with
+    /// "escape to cancel • enter to save" under it.
+    fn inline_editor(&mut self, ui: &mut egui::Ui, message: &Message) {
+        let accent=self.accent();
+        let Some((_, text)) = self.edit.as_mut() else { return };
+        let response=egui::Frame::NONE.fill(CARD).stroke(Stroke::new(1.5_f32,accent)).corner_radius(8).inner_margin(egui::Margin::symmetric(12,8)).show(ui,|ui|{
+            ui.add(egui::TextEdit::multiline(text)
+                .id_salt(("inline-edit",&message.id))
+                .return_key(egui::KeyboardShortcut::new(egui::Modifiers::SHIFT,egui::Key::Enter))
+                .desired_rows(1).desired_width(f32::INFINITY).frame(false))
+        }).inner;
+        if self.focus_edit{response.request_focus();self.focus_edit=false;}
+        let (mut save,mut cancel)=(false,false);
+        // The text box lets go of focus on Esc, so a box that just lost focus still counts.
+        if response.has_focus()||response.lost_focus(){
+            ui.input(|i|{
+                if i.key_pressed(egui::Key::Escape){cancel=true;}
+                if !i.events.iter().any(|e|matches!(e,egui::Event::Ime(_)))&&i.events.iter().any(|e|matches!(e,egui::Event::Key{key:egui::Key::Enter,pressed:true,repeat:false,modifiers,..}if !modifiers.shift)){save=true;}
+            });
+        }
+        ui.horizontal(|ui|{
+            ui.spacing_mut().item_spacing.x=0.0;
+            let link=|ui:&mut egui::Ui,label:&str|ui.add(egui::Label::new(RichText::new(label).size(12.0).color(crate::message_media::LINK)).sense(egui::Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand).clicked();
+            ui.label(RichText::new("escape to ").size(12.0).color(MUTED));
+            if link(ui,"cancel"){cancel=true;}
+            ui.label(RichText::new(" • enter to ").size(12.0).color(MUTED));
+            if link(ui,"save"){save=true;}
+        });
+        if cancel{self.edit=None;}else if save{self.save_edit(&message.channel_id);}
+    }
+    /// Saves the message being edited in place.
+    fn save_edit(&mut self, channel: &str) {
+        let Some((id, content)) = self.edit.clone() else { return };
+        let limit=if self.user.as_ref().is_some_and(|u|u.premium_type==2){4000}else{2000};
+        let content = content.trim_end().to_owned();
+        if content.trim().is_empty() { self.error = Some("A message can't be empty. Use Delete to remove it.".into()); return; }
+        if content.chars().count() > limit { self.error = Some(format!("Message limit for this account: {limit} characters.")); return; }
+        if self.preview {
+            if let Some(message) = self.messages.iter_mut().find(|m| m.id == id) {
+                message.content = content;
+                message.edited_timestamp = Some("edited".into());
+            }
+        } else {
+            self.send_command(Command::Edit { channel: channel.to_owned(), id, content });
+        }
+        self.edit = None;
     }
     fn react(&mut self, message: &Message, emoji: String, remove: bool) {
         if self.preview {
@@ -1929,46 +1982,6 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
     }
     fn dialogs(&mut self, ctx: &egui::Context) {
         self.extra_dialogs(ctx);
-        if let Some((id, mut content)) = self.edit.clone() {
-            let mut open = true;
-            egui::Window::new("Edit message")
-                .open(&mut open)
-                .collapsible(false)
-                .default_width(460.0)
-                .show(ctx, |ui| {
-                    ui.add(
-                        egui::TextEdit::multiline(&mut content)
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(5),
-                    );
-                    if ui
-                        .add_enabled(
-                            content.chars().count() <= 2000 && !content.trim().is_empty(),
-                            primary("Save changes"),
-                        )
-                        .clicked()
-                    {
-                        if self.preview {
-                            if let Some(message) = self.messages.iter_mut().find(|m| m.id == id) {
-                                message.content = content.clone();
-                                message.edited_timestamp = Some("edited".into());
-                            }
-                        } else if let Some(channel) = &self.channel {
-                            self.send_command(Command::Edit {
-                                channel: channel.id.clone(),
-                                id: id.clone(),
-                                content: content.clone(),
-                            });
-                        }
-                        self.edit = None;
-                    } else {
-                        self.edit = Some((id.clone(), content.clone()));
-                    }
-                });
-            if !open {
-                self.edit = None;
-            }
-        }
         if let Some(id) = self.delete.clone() {
             let mut open = true;
             egui::Window::new("Delete this message?")
@@ -1984,13 +1997,8 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         )
                         .clicked()
                     {
-                        if self.preview {
-                            self.messages.retain(|m| m.id != id);
-                        } else if let Some(channel) = &self.channel {
-                            self.send_command(Command::Delete {
-                                channel: channel.id.clone(),
-                                id: id.clone(),
-                            });
+                        if let Some(channel) = self.channel.as_ref().map(|c| c.id.clone()) {
+                            self.delete_now(&channel, &id);
                         }
                         self.delete = None;
                     }
@@ -2300,7 +2308,7 @@ mod interaction_tests {
         app.toggle_profile_at(&user,anchor);assert!(app.profile.is_none());
         app.toggle_profile_at(&user,anchor);assert!(app.profile.is_some());
     }
-    #[test]fn shift_message_controls_edit_and_request_delete_only_when_permitted(){
+    #[test]fn shift_message_controls_edit_and_delete_only_when_permitted(){
         let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);
         let mut message=app.messages.front().unwrap().clone();message.author=app.user.clone().unwrap();
         let id=egui::Id::new(("message-actions",&message.channel_id,&message.id));
@@ -2311,10 +2319,25 @@ mod interaction_tests {
         assert_eq!(app.edit,Some((message.id.clone(),message.content.clone())));
         let delete=ctx.read_response(id.with("delete")).unwrap().rect.center();let before=app.messages.len();
         for pressed in [true,false]{frame(&mut app,&message,true,vec![egui::Event::PointerMoved(delete),egui::Event::PointerButton{pos:delete,button:egui::PointerButton::Primary,pressed,modifiers:egui::Modifiers::SHIFT}]);}
-        assert_eq!(app.delete,Some(message.id.clone()));assert_eq!(app.messages.len(),before,"quick delete must still ask for confirmation");
+        assert_eq!(app.delete,None,"quick delete must not ask for confirmation");assert_eq!(app.messages.len(),before-1,"quick delete removes the message at once");
         for _ in 0..2{frame(&mut app,&message,false,vec![]);}assert!(ctx.read_response(id.with("edit")).is_none());
         message.author.id="someone-else".into();app.guild=None;
         frame(&mut app,&message,true,vec![egui::Event::PointerMoved(egui::pos2(700.0,24.0))]);assert!(ctx.read_response(id.with("edit")).is_none()&&ctx.read_response(id.with("delete")).is_none());
+    }
+    #[test]fn editing_opens_a_focused_box_in_the_message_and_enter_saves_escape_cancels(){
+        let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);
+        let mut message=app.messages.back().unwrap().clone();message.author=app.user.clone().unwrap();
+        if let Some(m)=app.messages.back_mut(){m.author=message.author.clone();}
+        let frame=|app:&mut Eclipse,message:&Message,events|{ctx.run(input(events),|ctx|{egui::CentralPanel::default().show(ctx,|ui|app.message_ui(ui,message));})};
+        app.start_edit(&message);frame(&mut app,&message,vec![]);
+        let focused=ctx.memory(|m|m.focused());assert!(focused.is_some(),"the edit box takes focus straight away");
+        frame(&mut app,&message,vec![egui::Event::Text(" (edited)".into())]);
+        frame(&mut app,&message,vec![egui::Event::Key{key:egui::Key::Enter,physical_key:None,pressed:true,repeat:false,modifiers:Default::default()}]);
+        assert!(app.edit.is_none());let saved=app.messages.iter().find(|m|m.id==message.id).unwrap();
+        assert_eq!(saved.content,format!("{} (edited)",message.content));
+        app.start_edit(&message);frame(&mut app,&message,vec![]);
+        frame(&mut app,&message,vec![egui::Event::Key{key:egui::Key::Escape,physical_key:None,pressed:true,repeat:false,modifiers:Default::default()}]);
+        assert!(app.edit.is_none());
     }
     fn composer_frame(ctx:&egui::Context,app:&mut Eclipse,channel:&Channel,events:Vec<egui::Event>)->egui::FullOutput{ctx.run(input(events),|ctx|{egui::CentralPanel::default().show(ctx,|ui|{app.composer(ui,ctx,channel);});})}
     #[test]fn composer_enter_sends_shift_enter_inserts_newline_and_unfocused_enter_does_nothing(){

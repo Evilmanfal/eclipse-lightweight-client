@@ -1,5 +1,7 @@
 # Unreleased
 
+- Shift-hover quick delete removes the message at once, without a confirmation (the right-click Delete still asks).
+- Editing a message happens in place, like Discord: the message turns into an outlined, already-focused edit box with "escape to cancel • enter to save" under it. The separate edit popup is gone.
 - Update prompt at launch: when GitHub has a newer Eclipse release, Eclipse asks whether to update. Yes downloads it, checks it against the release checksum, installs it and restarts; No keeps a green update button in the top right to update later.
 - Links in messages and embeds are clickable and shown in link blue (right-click to copy).
 - Link previews are one Discord-style card: colored side bar, site name, linked title, description and fields, with the thumbnail inside the card instead of a large separate picture. Click a preview's picture to open it in the larger view.
