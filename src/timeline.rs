@@ -10,13 +10,6 @@ pub fn messages(live: &VecDeque<Message>, logs: &VecDeque<Logged>, channel: &str
     result.sort_by(|a,b| a.timestamp.cmp(&b.timestamp).then_with(||a.id.parse::<u64>().unwrap_or(0).cmp(&b.id.parse::<u64>().unwrap_or(0))));
     result
 }
-/// Messages sent by the same person within 7 minutes of the previous one share its avatar and name,
-/// like Discord. Replies always start a new group.
-pub fn continues(previous:&Message,message:&Message)->bool{
-    if previous.author.id.is_empty()||previous.author.id!=message.author.id||message.referenced_message.is_some(){return false;}
-    let seconds=crate::message_time::seconds;
-    seconds(&previous.timestamp).zip(seconds(&message.timestamp)).is_some_and(|(a,b)|(0..=420).contains(&(b-a)))
-}
 pub fn is_edit(message:&Message,update:&serde_json::Value)->bool {
     update["content"].as_str().is_some_and(|content|content!=message.content)
         ||update["edited_timestamp"].as_str().is_some_and(|timestamp|Some(timestamp)!=message.edited_timestamp.as_deref())
@@ -24,15 +17,6 @@ pub fn is_edit(message:&Message,update:&serde_json::Value)->bool {
 #[cfg(test)] mod tests {
     use super::*;
     fn message(id:&str,channel:&str,time:&str)->Message {Message{id:id.into(),channel_id:channel.into(),timestamp:time.into(),..Default::default()}}
-    #[test] fn consecutive_messages_group_until_seven_minutes_pass_or_someone_else_speaks() {
-        let by=|author:&str,time:&str|{let mut m=message("1","c",time);m.author.id=author.into();m};
-        let first=by("me","2026-10-06T02:56:00.000000+00:00");
-        assert!(continues(&first,&by("me","2026-10-06T03:02:59+00:00")));
-        assert!(!continues(&first,&by("me","2026-10-06T03:03:01+00:00")));
-        assert!(!continues(&first,&by("you","2026-10-06T02:56:30+00:00")));
-        let mut reply=by("me","2026-10-06T02:56:30+00:00");reply.referenced_message=Some(Box::new(first.clone()));
-        assert!(!continues(&first,&reply));
-    }
     #[test] fn delete_snapshots_survive_channel_reload_without_duplicates_or_cross_channel_leaks() {
         let live=VecDeque::from([message("20","a","02"),message("30","a","03")]);
         let logs=VecDeque::from([Logged{message:message("10","a","01"),deleted:true},Logged{message:message("20","a","02"),deleted:false},Logged{message:message("30","a","03"),deleted:true},Logged{message:message("40","b","04"),deleted:true}]);
