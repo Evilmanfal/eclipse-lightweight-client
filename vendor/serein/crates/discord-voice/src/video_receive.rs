@@ -140,9 +140,124 @@ pub(crate) fn is_keyframe(frame: &[u8]) -> bool {
 	false
 }
 
+/// How long packets after a gap wait for the missing one to be retransmitted before the gap
+/// is treated as loss (and a keyframe requested instead).
+const REORDER_WAIT: Duration = Duration::from_millis(250);
+/// How often a still-missing packet is asked for again, and how many times.
+const NACK_RETRY: Duration = Duration::from_millis(60);
+const NACK_TRIES: u8 = 4;
+const MAX_HELD: usize = 768;
+const MAX_HELD_BYTES: usize = 2 * 1024 * 1024;
+
+/// A packet waiting in sequence order: (sequence, timestamp, marker, payload).
+type Held = (u16, u32, bool, Vec<u8>);
+struct Missing {
+	sequence: u16,
+	since: Instant,
+	asked: Option<Instant>,
+	tries: u8,
+}
+
+/// Puts one SSRC's packets back in sequence order before reassembly. A gap is reported for
+/// retransmission (RFC 4585 NACK) and the packets after it wait briefly, so one lost packet
+/// costs a short delay instead of every picture until the next keyframe.
+#[derive(Default)]
+struct Reorder {
+	expected: Option<u16>,
+	held: Vec<Held>,
+	held_bytes: usize,
+	missing: Vec<Missing>,
+}
+impl Reorder {
+	fn insert(&mut self, packet: Held, now: Instant) -> Vec<Held> {
+		let mut out = Vec::new();
+		let sequence = packet.0;
+		let Some(expected) = self.expected else {
+			self.expected = Some(sequence.wrapping_add(1));
+			out.push(packet);
+			return out;
+		};
+		let distance = sequence.wrapping_sub(expected);
+		if distance >= 32768 {
+			return out; // Duplicate, or a retransmission that arrived after the gap was given up.
+		}
+		if distance == 0 {
+			self.expected = Some(sequence.wrapping_add(1));
+			self.missing.retain(|m| m.sequence != sequence);
+			out.push(packet);
+			self.drain(&mut out);
+		} else if distance < 1024 {
+			if self.held.iter().any(|held| held.0 == sequence) {
+				return out;
+			}
+			for step in 0..distance.min(256) {
+				let gap = expected.wrapping_add(step);
+				if self.missing.len() < 512
+					&& !self.held.iter().any(|held| held.0 == gap)
+					&& !self.missing.iter().any(|m| m.sequence == gap)
+				{
+					self.missing.push(Missing { sequence: gap, since: now, asked: None, tries: 0 });
+				}
+			}
+			self.missing.retain(|m| m.sequence != sequence);
+			self.held_bytes += packet.3.len();
+			self.held.push(packet);
+		} else {
+			// The sender jumped far ahead (restart): resynchronize on this packet.
+			*self = Self::default();
+			self.expected = Some(sequence.wrapping_add(1));
+			out.push(packet);
+			return out;
+		}
+		while !self.held.is_empty()
+			&& (self.held.len() >= MAX_HELD
+				|| self.held_bytes >= MAX_HELD_BYTES
+				|| self.missing.iter().any(|m| now.duration_since(m.since) >= REORDER_WAIT))
+		{
+			self.skip(&mut out);
+		}
+		out
+	}
+	/// Gives up on the oldest gap: continue from the earliest packet that did arrive.
+	fn skip(&mut self, out: &mut Vec<Held>) {
+		let Some(expected) = self.expected else { return };
+		let Some(first) = self.held.iter().map(|held| held.0).min_by_key(|s| s.wrapping_sub(expected)) else {
+			self.missing.clear();
+			return;
+		};
+		self.missing.retain(|m| m.sequence.wrapping_sub(first) < 32768);
+		self.expected = Some(first);
+		self.drain(out);
+	}
+	fn drain(&mut self, out: &mut Vec<Held>) {
+		while let Some(expected) = self.expected
+			&& let Some(index) = self.held.iter().position(|held| held.0 == expected)
+		{
+			let packet = self.held.swap_remove(index);
+			self.held_bytes -= packet.3.len();
+			self.missing.retain(|m| m.sequence != expected);
+			self.expected = Some(expected.wrapping_add(1));
+			out.push(packet);
+		}
+	}
+	/// Missing packets due a (re)request now.
+	fn nacks(&mut self, now: Instant) -> Vec<u16> {
+		self.missing.iter_mut()
+			.filter(|m| m.tries < NACK_TRIES && m.asked.is_none_or(|at| now.duration_since(at) >= NACK_RETRY))
+			.take(128)
+			.map(|m| {
+				m.asked = Some(now);
+				m.tries += 1;
+				m.sequence
+			})
+			.collect()
+	}
+}
+
 /// Reassembles RTP payloads of one SSRC into Annex-B access units (single NAL, STAP-A, FU-A).
 #[derive(Default)]
 pub(crate) struct Assembler {
+	reorder: Reorder,
 	timestamp: u32,
 	next_sequence: Option<u16>,
 	frame: Vec<u8>,
@@ -454,6 +569,37 @@ impl Receivers {
 		}
 		!self.awaiting_keyframe.contains(&user)
 	}
+	/// Takes one packet in any order; returns every access unit it completes, in order.
+	/// Gaps wait briefly for a retransmission (see `nacks`) before counting as loss.
+	pub fn receive(
+		&mut self,
+		ssrc: u32,
+		sequence: u16,
+		timestamp: u32,
+		marker: bool,
+		payload: &[u8],
+		now: Instant,
+	) -> Vec<(u64, Vec<u8>)> {
+		let Some(index) = self.sources.iter().position(|(s, _, _)| *s == ssrc) else {
+			self.stats.unknown_ssrc += 1;
+			return Vec::new();
+		};
+		let ordered = self.sources[index].2.reorder.insert((sequence, timestamp, marker, payload.to_vec()), now);
+		ordered
+			.into_iter()
+			.filter_map(|(sequence, timestamp, marker, payload)| self.push(ssrc, sequence, timestamp, marker, &payload))
+			.collect()
+	}
+	/// Per media SSRC, the missing packets to ask the server to retransmit now.
+	pub fn nacks(&mut self, now: Instant) -> Vec<(u32, Vec<u16>)> {
+		self.sources
+			.iter_mut()
+			.filter_map(|(ssrc, _, assembler)| {
+				let missing = assembler.reorder.nacks(now);
+				(!missing.is_empty()).then_some((*ssrc, missing))
+			})
+			.collect()
+	}
 	/// Returns the owning user and a complete encrypted access unit when one closes.
 	pub fn push(
 		&mut self,
@@ -513,6 +659,35 @@ pub(crate) fn spawn_decoder(sink: VideoSink) -> Result<(DecoderQueue, Lost), &'s
 		},
 		lost,
 	))
+}
+
+/// RFC 4585 generic NACK asking the media server to retransmit specific packets
+/// (sorted into PID + bitmask entries, at most 64 per packet).
+pub(crate) fn nack(sender: u32, media: u32, sequences: &[u16]) -> ([u8; 8], Vec<u8>) {
+	let mut sorted = sequences.to_vec();
+	sorted.sort_by_key(|s| s.wrapping_sub(sequences[0]));
+	sorted.dedup();
+	let mut entries: Vec<(u16, u16)> = Vec::new();
+	for sequence in sorted {
+		let offset = entries.last().map(|(pid, _)| sequence.wrapping_sub(*pid));
+		if let (Some(offset @ 1..=16), Some((_, mask))) = (offset, entries.last_mut()) {
+			*mask |= 1 << (offset - 1);
+		} else if entries.len() < 64 {
+			entries.push((sequence, 0));
+		} else {
+			break;
+		}
+	}
+	let length = 2 + entries.len() as u16;
+	let mut header = [0x81, 205, 0, 0, 0, 0, 0, 0];
+	header[2..4].copy_from_slice(&length.to_be_bytes());
+	header[4..].copy_from_slice(&sender.to_be_bytes());
+	let mut body = media.to_be_bytes().to_vec();
+	for (pid, mask) in entries {
+		body.extend_from_slice(&pid.to_be_bytes());
+		body.extend_from_slice(&mask.to_be_bytes());
+	}
+	(header, body)
 }
 
 /// RFC 4585 Picture Loss Indication asking the media server for a fresh keyframe.
@@ -844,6 +1019,36 @@ fn bounded(width: usize, height: usize) -> Result<(u32, u32), ()> {
 mod tests {
 	use super::*;
 
+	#[test]
+	fn lost_packets_are_requested_and_waited_for_before_counting_as_loss() {
+		let start = Instant::now();
+		let mut receivers = Receivers::default();
+		receivers.announce(5, 900).unwrap();
+		// Picture 1 is one packet; picture 2 is two FU-A fragments, the first of which is late.
+		assert_eq!(receivers.receive(900, 10, 90, true, &[0x65, 1], start).len(), 1);
+		let first = [0x7c, 0x85, 2];
+		let second = [0x7c, 0x45, 3];
+		assert!(receivers.receive(900, 12, 180, true, &second, start).is_empty(), "held until the gap fills");
+		assert_eq!(receivers.nacks(start), vec![(900, vec![11])]);
+		assert!(receivers.nacks(start + Duration::from_millis(10)).is_empty(), "not asked again immediately");
+		assert_eq!(receivers.nacks(start + NACK_RETRY), vec![(900, vec![11])]);
+		let pictures = receivers.receive(900, 11, 180, false, &first, start + Duration::from_millis(80));
+		assert_eq!(pictures.len(), 1, "the retransmission completes the picture");
+		assert_eq!(receivers.take_stats().incomplete, 0, "nothing was lost");
+		// A gap that is never filled is given up after the wait, and the loss path takes over.
+		assert!(receivers.receive(900, 15, 270, true, &[0x65, 4], start + Duration::from_millis(100)).is_empty());
+		let late = start + Duration::from_millis(100) + REORDER_WAIT;
+		receivers.receive(900, 16, 360, true, &[0x65, 5], late);
+		assert!(receivers.take_stats().incomplete > 0 && receivers.awaiting(), "unrecovered loss still asks for a keyframe");
+	}
+	#[test]
+	fn nack_packets_follow_rfc_4585() {
+		let (header, body) = nack(7, 900, &[100, 101, 117, 200]);
+		assert_eq!(header, [0x81, 205, 0, 5, 0, 0, 0, 7]);
+		assert_eq!(&body[..4], &900u32.to_be_bytes());
+		// 100 with 101 in bit 0 and 116 (=100+16) not set; 117 starts a new entry; then 200.
+		assert_eq!(&body[4..], &[0, 100, 0, 1, 0, 117, 0, 0, 0, 200, 0, 0]);
+	}
 	fn decoder_cleanup_queue(capacity: usize) -> (DecoderQueue, Receiver<Decode>) {
 		let (send, receive) = sync_channel(capacity);
 		(
