@@ -996,7 +996,7 @@ impl Calls {
             let avatar=egui::Rect::from_center_size(rect.center()-Vec2::new(0.,if live&&!small{18.}else{0.}),Vec2::splat(radius*2.));ui.painter().circle_filled(avatar.center(),radius,egui::Color32::from_gray(65));
             if let Some(texture)=crate::assets::avatar_url(user,None,None).and_then(|url|images.texture(&url,avatar,ui.ctx())){egui::Image::new((texture,avatar.size())).corner_radius(radius).paint_at(ui,avatar);}else{ui.painter().text(avatar.center(),egui::Align2::CENTER_CENTER,user.name().chars().take(2).collect::<String>(),egui::FontId::proportional(radius*0.7),egui::Color32::WHITE);}
         }
-        let speaking=if self.user.as_ref().is_some_and(|u|u.id==user.id){self.self_speaking()}else{self.speaking.contains(&id)};
+        let speaking=self.is_speaking(&user.id);
         if speaking{ui.painter().rect_stroke(rect,8,egui::Stroke::new(2.0_f32,egui::Color32::from_rgb(35,165,90)),egui::StrokeKind::Inside);}
         ui.painter().text(rect.left_bottom()+Vec2::new(10.,-10.),egui::Align2::LEFT_BOTTOM,user.name(),egui::FontId::proportional(if small{12.}else{14.}),egui::Color32::WHITE);
         if !live{return false;}
@@ -1161,6 +1161,12 @@ impl Calls {
         if let Some(user)=self.pending_watch.clone(){
             if self.ready&&self.is_streaming(&user){let _=self.watch(&user);}
         }
+    }
+    /// Whether someone in this call is talking right now: you by your microphone or
+    /// push-to-talk key, others by the voice server's speaking reports.
+    pub fn is_speaking(&self,user:&str)->bool{
+        if self.user.as_ref().is_some_and(|u|u.id==user){return self.self_speaking();}
+        self.ready&&user.parse::<u64>().is_ok_and(|id|self.speaking.contains(&id))
     }
     pub fn is_streaming(&self,user:&str)->bool{self.streams.iter().any(|(_,id)|id==user)}
     pub fn watching(&self)->Option<&str>{let key=self.watch_key.as_deref()?;self.streams.iter().find(|(k,_)|k==key).map(|(_,id)|id.as_str())}
@@ -1365,6 +1371,17 @@ mod tests {
         let (intent, epoch) = calls.intent();
         calls.hang_up();
         assert_ne!(intent.load(Ordering::Acquire), epoch);
+    }
+    #[test]
+    fn friends_show_as_speaking_while_the_voice_server_reports_them(){
+        let mut calls=Calls::new(egui::Context::default());
+        calls.user=Some(User{id:"56".into(),..Default::default()});
+        calls.channel=Some(Channel{id:"12".into(),..Default::default()});
+        calls.speaking=vec![77];
+        assert!(!calls.is_speaking("77"),"not until the call is connected");
+        calls.ready=true;
+        assert!(calls.is_speaking("77")&&!calls.is_speaking("78")&&!calls.is_speaking("not-a-number"));
+        calls.speaking.clear();assert!(!calls.is_speaking("77"));
     }
     #[test]
     fn own_speaking_indicator_requires_connected_unmuted_transport_activity() {

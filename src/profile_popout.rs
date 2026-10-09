@@ -130,7 +130,8 @@ impl Eclipse {
             let (user,name)=self.voice_identity(state);
             if user.username.is_empty(){missing.push(state.user_id.clone());}
             let own=in_call&&state.user_id==me;
-            let speaking=own&&self.calls.self_speaking();
+            // The green ring shows whoever is talking, like Discord; only known while in the call.
+            let speaking=in_call&&self.calls.is_speaking(&state.user_id);
             // Hovering someone who is live offers Watch Stream, like Discord.
             let row=egui::Rect::from_min_size(ui.cursor().min,Vec2::new(ui.available_width(),22.));
             let offer=state.streaming&&!own&&ui.rect_contains_pointer(row)&&!(in_call&&self.calls.watching()==Some(state.user_id.as_str()));
