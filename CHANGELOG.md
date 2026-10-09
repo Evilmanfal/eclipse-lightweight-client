@@ -13,6 +13,7 @@
 - Removed repetitive settings navigation tooltips.
 - Smaller server-only online member count, using reported server totals or known online/idle/DND statuses. No count in DMs/group chats.
 - Shift-hover message actions provide quick edit and permitted delete, retaining delete confirmation.
+- Compact mode (Appearance or Chat): 85% interface scale, with panels joined into one connected surface and thin dividers instead of gaps and rounded cards. Buttons stay rounded, message avatars stay visible and message spacing is tighter. Replaces the earlier avatar-free compact messages.
 - Updates the same Eclipse.exe and ZIP and preserves local preferences.
 
 # Eclipse 0.7 — October 8, 2026
