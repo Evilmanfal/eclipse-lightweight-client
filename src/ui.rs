@@ -1709,6 +1709,11 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     });
                 });
             });}).response;
+        if crate::message_media::viewer_needs_caption(ui.ctx()) {
+            let avatar=assets::avatar_url(&message.author,self.guild.as_deref(),message.member.as_ref().and_then(|m|m.avatar.as_deref()));
+            let time=self.message_clock.label(&message.timestamp);
+            crate::message_media::caption_viewer(ui.ctx(),message.author.name(),&time,avatar);
+        }
         if self.preview&&self.preview_gesture==Some("message")&&self.user.as_ref().is_some_and(|u|u.id==message.author.id){ui.ctx().data_mut(|d|d.insert_temp(egui::Id::new("preview-gesture-point"),response.rect.center()));}
         if highlight {
             let rect = response.rect;
@@ -2069,7 +2074,7 @@ impl eframe::App for Eclipse {
             self.login(ctx);
         } else {
             self.left_column(ctx);
-            if self.home!=Home::Chat{self.home_panel(ctx);}else{self.conversation_header(ctx);if self.calls.active()&&!self.calls.chat{egui::CentralPanel::default().frame(egui::Frame::NONE.fill(preferences_bg(&self.prefs)).inner_margin(if self.compact{0}else{8})).show(ctx,|ui|self.calls.stage(ui,&mut self.images));}else{self.members(ctx);self.conversation(ctx);}}
+            if self.home!=Home::Chat{self.home_panel(ctx);}else{self.conversation_header(ctx);if self.calls.active()&&!self.calls.chat{self.sync_call_roster();egui::CentralPanel::default().frame(egui::Frame::NONE.fill(preferences_bg(&self.prefs)).inner_margin(if self.compact{0}else{8})).show(ctx,|ui|self.calls.stage(ui,&mut self.images));}else{self.members(ctx);self.conversation(ctx);}}
         }
         self.dialogs(ctx);
         if self.home!=Home::Chat||self.settings||self.server_settings||self.channel.as_ref().is_none_or(|c|c.id!=self.picker.channel)||self.calls.active()&&!self.calls.chat{self.picker.close();}

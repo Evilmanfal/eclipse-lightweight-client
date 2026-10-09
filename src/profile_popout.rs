@@ -99,6 +99,12 @@ impl Eclipse {
     pub(in crate::ui) fn guild_tag_chip(&mut self,ui:&mut egui::Ui,user:&User){
         if let Some((tag,url))=crate::identity::guild_tag(user){egui::Frame::NONE.fill(CARD).corner_radius(4).inner_margin(egui::Margin::symmetric(4,2)).show(ui,|ui|{ui.horizontal(|ui|{ui.spacing_mut().item_spacing.x=3.;if url.is_some(){let(rect,_)=ui.allocate_exact_size(Vec2::splat(13.),egui::Sense::hover());crate::identity::paint_art(ui,&mut self.images,rect,url,0);}ui.label(RichText::new(tag).size(10.).strong().color(TEXT));});});}
     }
+    /// Gives the call screen the same people the sidebar lists under the call's voice channel.
+    pub(in crate::ui) fn sync_call_roster(&mut self){
+        let Some(channel)=self.calls.channel().cloned() else{return};
+        let users=self.voice.in_channel(&channel.id).iter().map(|state|self.voice_identity(state).0).collect();
+        self.calls.sync_roster(users);
+    }
     /// Everyone in a voice channel, from any Discord client, listed under the channel like Discord.
     pub(in crate::ui) fn voice_member_row(&mut self,ui:&mut egui::Ui,channel:&Channel){
         if channel.kind!=2{return;}

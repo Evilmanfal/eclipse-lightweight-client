@@ -882,7 +882,8 @@ impl Calls {
                         let avatar=egui::Rect::from_center_size(rect.center(),Vec2::splat(76.));ui.painter().circle_filled(avatar.center(),38.,egui::Color32::from_gray(65));
                         if let Some(texture)=crate::assets::avatar_url(user,None,None).and_then(|url|images.texture(&url,avatar,ui.ctx())){egui::Image::new((texture,avatar.size())).corner_radius(38).paint_at(ui,avatar);}else{ui.painter().text(avatar.center(),egui::Align2::CENTER_CENTER,user.name().chars().take(2).collect::<String>(),egui::FontId::proportional(26.),egui::Color32::WHITE);}
                     }
-                    if self.speaking.contains(&id){ui.painter().rect_stroke(rect,8,egui::Stroke::new(2.0_f32,egui::Color32::from_rgb(35,165,90)),egui::StrokeKind::Inside);}
+                    let speaking=if self.user.as_ref().is_some_and(|u|u.id==user.id){self.self_speaking()}else{self.speaking.contains(&id)};
+                    if speaking{ui.painter().rect_stroke(rect,8,egui::Stroke::new(2.0_f32,egui::Color32::from_rgb(35,165,90)),egui::StrokeKind::Inside);}
                     ui.painter().text(rect.left_bottom()+Vec2::new(12.,-12.),egui::Align2::LEFT_BOTTOM,user.name(),egui::FontId::proportional(14.),egui::Color32::WHITE);
                 }});ui.add_space(12.);}
                 for (id,texture) in &self.textures{if !self.participants.contains_key(&id.to_string()){ui.add(egui::Image::new(texture).max_width(ui.available_width()));}}
@@ -985,7 +986,27 @@ impl Calls {
     pub fn active(&self)->bool{self.channel.is_some()}
     pub fn channel(&self)->Option<&Channel>{self.channel.as_ref()}
     pub fn connection_label(&self)->&str{if self.ready{"Voice connected"}else{"Connecting voice…"}}
-    pub fn self_speaking(&self)->bool{self.active()&&self.ready&&!self.muted&&!self.deafened&&!self.server_muted&&!self.server_deafened&&hotkey_open(self.ptt.load(Ordering::Acquire),key_down)&&self.user.as_ref().and_then(|u|u.id.parse::<u64>().ok()).is_some_and(|id|self.speaking.contains(&id))}
+    pub fn self_speaking(&self)->bool{
+        // Keep checking the push-to-talk key so the green ring follows it even while Eclipse is idle.
+        if self.prefs.push_to_talk&&self.active(){self.ctx.request_repaint_after(Duration::from_millis(50));}
+        self.self_speaking_with(key_down)
+    }
+    fn self_speaking_with(&self,down:impl Fn(i32)->bool)->bool{
+        if !(self.active()&&self.ready&&!self.muted&&!self.deafened&&!self.server_muted&&!self.server_deafened&&hotkey_open(self.ptt.load(Ordering::Acquire),&down)){return false;}
+        // With push to talk, holding the key means you're talking, like Discord; otherwise the microphone decides.
+        self.prefs.push_to_talk||self.user.as_ref().and_then(|u|u.id.parse::<u64>().ok()).is_some_and(|id|self.speaking.contains(&id))
+    }
+    /// Keeps the call screen's tiles in step with who Discord says is in the channel, the same list
+    /// the sidebar shows, so people who were already there when you joined appear too.
+    pub fn sync_roster(&mut self,users:Vec<User>){
+        let Some(channel)=&self.channel else{return};
+        let me=self.user.as_ref().map(|u|u.id.clone()).unwrap_or_default();
+        if channel.guild_id.is_some()&&!users.is_empty(){self.participants.retain(|id,_|*id==me||users.iter().any(|u|&u.id==id));}
+        for user in users.into_iter().filter(|u|!u.id.is_empty()).take(64){
+            let entry=self.participants.entry(user.id.clone()).or_insert_with(||user.clone());
+            if entry.username.is_empty(){*entry=user;}
+        }
+    }
     pub fn muted(&self)->bool{self.muted}
     pub fn deafened(&self)->bool{self.deafened}
     pub fn toggle_mute(&mut self){self.muted=!self.muted;self.update_controls();crate::sounds::play(if self.muted{crate::sounds::Cue::Mute}else{crate::sounds::Cue::Unmute},self.prefs.ui_sounds);}
@@ -1129,5 +1150,28 @@ mod tests {
         calls.server_deafened=true;assert!(!calls.self_speaking());calls.server_deafened=false;
         calls.speaking=vec![99];assert!(!calls.self_speaking());
         calls.speaking=vec![56];calls.channel=None;assert!(!calls.self_speaking());
+    }
+    #[test]
+    fn push_to_talk_ring_follows_the_key_not_the_microphone(){
+        let mut calls=Calls::new(egui::Context::default());
+        calls.user=Some(User{id:"56".into(),..Default::default()});
+        calls.channel=Some(Channel{id:"12".into(),..Default::default()});calls.ready=true;
+        calls.configure(&crate::preferences::Preferences{push_to_talk:true,ptt_key:119,..Default::default()});
+        calls.speaking=vec![];
+        assert!(calls.self_speaking_with(|k|k==119),"holding the key without mic activity should show the ring");
+        calls.speaking=vec![56];
+        assert!(!calls.self_speaking_with(|_|false),"mic activity without the key should not show the ring");
+        calls.muted=true;assert!(!calls.self_speaking_with(|k|k==119));
+    }
+    #[test]
+    fn call_tiles_include_people_already_in_the_channel(){
+        let mut calls=Calls::new(egui::Context::default());
+        let me=User{id:"1".into(),username:"me".into(),..Default::default()};
+        calls.join(&Channel{id:"10".into(),guild_id:Some("5".into()),kind:2,..Default::default()},&me,false).unwrap();
+        let friend=|id:&str,name:&str|User{id:id.into(),username:name.into(),..Default::default()};
+        calls.sync_roster(vec![me.clone(),friend("2","husain"),friend("3","mahin")]);
+        assert_eq!(calls.participants.len(),3);
+        calls.sync_roster(vec![me.clone(),friend("2","husain")]);
+        assert!(calls.participants.contains_key("1")&&calls.participants.contains_key("2")&&!calls.participants.contains_key("3"));
     }
 }

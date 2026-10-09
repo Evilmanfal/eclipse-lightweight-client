@@ -178,38 +178,76 @@ pub fn picture(
     response.context_menu(|ui|{if ui.button("Open image").clicked(){ui.ctx().open_url(egui::OpenUrl::new_tab(url));ui.close();}if ui.button("Copy image link").clicked(){ui.ctx().copy_text(url.to_owned());ui.close();}});
 }
 fn viewer_id()->egui::Id{egui::Id::new("eclipse-image-viewer")}
-/// Opens the full-window viewer for a chat picture.
-pub fn open_viewer(ctx:&egui::Context,url:&str){ctx.data_mut(|d|d.insert_temp(viewer_id(),url.to_owned()));}
-/// The full-window picture viewer: the image fitted to the window over a dark backdrop.
+/// What the picture viewer shows: the image and who sent it.
+#[derive(Clone,Default)]
+pub struct Viewer{url:String,name:String,time:String,avatar:Option<String>,captioned:bool,zoom:bool}
+/// Opens the picture viewer for a chat picture.
+pub fn open_viewer(ctx:&egui::Context,url:&str){ctx.data_mut(|d|d.insert_temp(viewer_id(),Viewer{url:url.to_owned(),..Default::default()}));}
+/// Whether a viewer was just opened and still needs its sender and time.
+pub fn viewer_needs_caption(ctx:&egui::Context)->bool{ctx.data(|d|d.get_temp::<Viewer>(viewer_id())).is_some_and(|v|!v.captioned)}
+/// Called after each message is drawn: a viewer opened from that message gets its sender and time.
+pub fn caption_viewer(ctx:&egui::Context,name:&str,time:&str,avatar:Option<String>){
+    let Some(mut viewer)=ctx.data(|d|d.get_temp::<Viewer>(viewer_id())) else{return};
+    if viewer.captioned{return;}
+    viewer.name=name.to_owned();viewer.time=time.to_owned();viewer.avatar=avatar;viewer.captioned=true;
+    ctx.data_mut(|d|d.insert_temp(viewer_id(),viewer));
+}
+/// One round toolbar button drawn with the painter, like Discord's media viewer.
+fn tool(ui:&mut egui::Ui,rect:egui::Rect,tip:&str,draw:impl Fn(&egui::Painter,egui::Pos2,egui::Stroke))->egui::Response{
+    let response=ui.interact(rect,ui.id().with(tip),egui::Sense::click()).on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand);
+    if response.hovered(){ui.painter().rect_filled(rect,6,egui::Color32::from_white_alpha(18));}
+    draw(ui.painter(),rect.center(),egui::Stroke::new(1.6_f32,egui::Color32::from_gray(225)));
+    response
+}
+/// The picture viewer, like Discord's: the picture at its own size (shrunk only to fit) over the
+/// dimmed app, the sender and time at the top left, and zoom, open, copy and close at the top right.
 /// Click outside the picture or press Esc to close it.
 pub fn viewer(ctx:&egui::Context,images:&mut Images){
-    let Some(url)=ctx.data(|d|d.get_temp::<String>(viewer_id())) else{return};
+    let Some(mut viewer)=ctx.data(|d|d.get_temp::<Viewer>(viewer_id())) else{return};
+    let url=viewer.url.clone();
     let mut close=ctx.input(|i|i.key_pressed(egui::Key::Escape));
     let screen=ctx.screen_rect();
     egui::Area::new(egui::Id::new("image-viewer-area")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx,|ui|{
+        use egui::{Color32,pos2};
         let (rect,backdrop)=ui.allocate_exact_size(screen.size(),egui::Sense::click());
-        ui.painter().rect_filled(rect,0,egui::Color32::from_black_alpha(220));
-        let bounds=rect.shrink2(Vec2::new(40.0,60.0));
-        let request=Vec2::splat(bounds.size().max_elem());
-        let mut picture=egui::Rect::from_center_size(bounds.center(),Vec2::splat(0.0));
+        ui.painter().rect_filled(rect,0,Color32::from_black_alpha(205));
+        // The picture, never stretched past its own size unless zoomed.
+        let bounds=egui::Rect::from_min_max(rect.min+Vec2::new(40.0,80.0),rect.max-Vec2::new(40.0,40.0));
+        let request=Vec2::splat(1024.0/ctx.pixels_per_point());
+        let mut picture=egui::Rect::from_center_size(bounds.center(),Vec2::ZERO);
         if let Some(texture)=images.texture_sized(&url,request,ctx){
-            let size=images.dimensions(&url,request,ctx).unwrap_or(bounds.size());
-            let scale=(bounds.width()/size.x.max(1.0)).min(bounds.height()/size.y.max(1.0));
+            let size=images.dimensions(&url,request,ctx).unwrap_or(bounds.size())/ctx.pixels_per_point();
+            let fit=(bounds.width()/size.x.max(1.0)).min(bounds.height()/size.y.max(1.0)).min(1.0);
+            let scale=if viewer.zoom{(fit*2.0).max(1.0)}else{fit};
             picture=egui::Rect::from_center_size(bounds.center(),size*scale);
-            egui::Image::new((texture,picture.size())).corner_radius(8).paint_at(ui,picture);
+            ui.painter().with_clip_rect(bounds.expand(20.0)).add(egui::Shape::image(texture,picture,egui::Rect::from_min_max(pos2(0.0,0.0),pos2(1.0,1.0)),Color32::WHITE));
         }else{
             let failed=images.failed(&url);
-            ui.painter().text(bounds.center(),egui::Align2::CENTER_CENTER,if failed{"Image unavailable"}else{"Loading image…"},egui::FontId::proportional(14.0),egui::Color32::GRAY);
+            ui.painter().text(bounds.center(),egui::Align2::CENTER_CENTER,if failed{"Image unavailable"}else{"Loading image…"},egui::FontId::proportional(14.0),Color32::GRAY);
             if !failed{ctx.request_repaint();}
         }
-        let footer=egui::Rect::from_center_size(egui::pos2(rect.center().x,rect.bottom()-30.0),Vec2::new(360.0,24.0));
-        ui.put(footer,|ui:&mut egui::Ui|ui.horizontal(|ui|{
-            ui.add(egui::Hyperlink::from_label_and_url(egui::RichText::new("Open in browser").color(LINK),&url));
-            ui.label(egui::RichText::new("·  Esc or click outside to close").color(egui::Color32::GRAY));
-        }).response);
+        // Sender and time, top left.
+        if viewer.captioned{
+            let avatar=egui::Rect::from_min_size(rect.min+Vec2::new(16.0,14.0),Vec2::splat(40.0));
+            ui.painter().circle_filled(avatar.center(),20.0,Color32::from_gray(60));
+            if let Some(texture)=viewer.avatar.as_deref().and_then(|a|images.texture(a,avatar,ctx)){egui::Image::new((texture,avatar.size())).corner_radius(20).paint_at(ui,avatar);}
+            ui.painter().text(avatar.right_top()+Vec2::new(12.0,2.0),egui::Align2::LEFT_TOP,&viewer.name,egui::FontId::proportional(16.0),Color32::WHITE);
+            ui.painter().text(avatar.right_bottom()+Vec2::new(12.0,-2.0),egui::Align2::LEFT_BOTTOM,&viewer.time,egui::FontId::proportional(12.0),Color32::from_gray(180));
+        }
+        // Toolbar and close button, top right.
+        let close_rect=egui::Rect::from_min_size(pos2(rect.right()-56.0,rect.top()+16.0),Vec2::splat(36.0));
+        ui.painter().rect_filled(close_rect,8,Color32::from_gray(28));ui.painter().rect_stroke(close_rect,8,egui::Stroke::new(1.0_f32,Color32::from_gray(60)),egui::StrokeKind::Inside);
+        if tool(ui,close_rect,"Close",|p,c,s|{let d=6.0;p.line_segment([c-Vec2::splat(d),c+Vec2::splat(d)],s);p.line_segment([c+Vec2::new(-d,d),c+Vec2::new(d,-d)],s);}).clicked(){close=true;}
+        let bar=egui::Rect::from_min_size(pos2(close_rect.left()-12.0-3.0*36.0-8.0,close_rect.top()),Vec2::new(3.0*36.0+8.0,36.0));
+        ui.painter().rect_filled(bar,8,Color32::from_gray(28));ui.painter().rect_stroke(bar,8,egui::Stroke::new(1.0_f32,Color32::from_gray(60)),egui::StrokeKind::Inside);
+        let slot=|i:f32|egui::Rect::from_min_size(bar.min+Vec2::new(4.0+i*36.0,0.0),Vec2::splat(36.0));
+        let zoom=viewer.zoom;
+        if tool(ui,slot(0.0),if zoom{"Zoom out"}else{"Zoom in"},|p,c,s|{let o=c-Vec2::splat(2.0);p.circle_stroke(o,6.0,s);p.line_segment([o+Vec2::splat(4.5),o+Vec2::splat(9.0)],s);p.line_segment([o-Vec2::new(3.0,0.0),o+Vec2::new(3.0,0.0)],s);if !zoom{p.line_segment([o-Vec2::new(0.0,3.0),o+Vec2::new(0.0,3.0)],s);}}).clicked(){viewer.zoom=!viewer.zoom;}
+        if tool(ui,slot(1.0),"Open in browser",|p,c,s|{let r=egui::Rect::from_center_size(c+Vec2::new(-1.0,1.0),Vec2::splat(12.0));p.rect_stroke(r,2,s,egui::StrokeKind::Middle);p.line_segment([c,c+Vec2::new(7.0,-7.0)],s);p.line_segment([c+Vec2::new(2.0,-7.0),c+Vec2::new(7.0,-7.0)],s);p.line_segment([c+Vec2::new(7.0,-7.0),c+Vec2::new(7.0,-2.0)],s);}).clicked(){ctx.open_url(egui::OpenUrl::new_tab(&url));}
+        if tool(ui,slot(2.0),"Copy link",|p,c,s|{p.rect_stroke(egui::Rect::from_center_size(c+Vec2::splat(2.0),Vec2::splat(10.0)),2,s,egui::StrokeKind::Middle);p.rect_stroke(egui::Rect::from_center_size(c-Vec2::splat(2.0),Vec2::splat(10.0)),2,s,egui::StrokeKind::Middle);}).clicked(){ctx.copy_text(url.clone());}
         if backdrop.clicked()&&!backdrop.interact_pointer_pos().is_some_and(|p|picture.contains(p)){close=true;}
     });
-    if close{ctx.data_mut(|d|d.remove::<String>(viewer_id()));}
+    ctx.data_mut(|d|if close{d.remove::<Viewer>(viewer_id());}else{d.insert_temp(viewer_id(),viewer);});
 }
 /// A Discord-style link preview in one card: colored side bar, site name, linked title, description
 /// and fields, with a small thumbnail beside the text or the large image inside the card.
@@ -289,7 +327,7 @@ mod tests {
     fn clicking_a_picture_opens_the_viewer_and_escape_closes_it(){
         let ctx=egui::Context::default();let mut images=Images::new(&ctx);let mut rect=egui::Rect::NOTHING;
         let url="https://cdn.discordapp.com/attachments/1/2/cat.png";
-        let open=|ctx:&egui::Context|ctx.data(|d|d.get_temp::<String>(viewer_id()));
+        let open=|ctx:&egui::Context|ctx.data(|d|d.get_temp::<Viewer>(viewer_id())).map(|v|v.url);
         for phase in 0..4 {
             let mut input=egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,Vec2::new(500.,500.))),..Default::default()};
             match phase{1|2=>{let pos=rect.center();input.events.push(egui::Event::PointerMoved(pos));input.events.push(egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed:phase==1,modifiers:Default::default()});},
