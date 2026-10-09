@@ -43,7 +43,7 @@ pub fn merged(user: &User, data: &Value) -> User {
     serde_json::from_value(value).unwrap_or_else(|_|user.clone())
 }
 pub fn paint_art(ui: &egui::Ui, images: &mut assets::Images, rect: egui::Rect, url: Option<String>, radius: u8) {
-    if ui.is_rect_visible(rect) { if let Some(url) = url { if let Some(id) = images.texture_sized(&url,rect.size(), ui.ctx()) { let uv=cover_uv(images.dimensions(&url,rect.size(),ui.ctx()).unwrap_or(rect.size()),rect.size());egui::Image::new((id, rect.size())).uv(uv).corner_radius(radius).paint_at(ui, rect); } } }
+    if ui.is_rect_visible(rect) { if let Some(url) = url { if let Some(id) = images.texture_hover(&url,rect, ui.ctx()) { let uv=cover_uv(images.dimensions(&url,rect.size(),ui.ctx()).unwrap_or(rect.size()),rect.size());egui::Image::new((id, rect.size())).uv(uv).corner_radius(radius).paint_at(ui, rect); } } }
 }
 pub fn cover_uv(source:Vec2,target:Vec2)->egui::Rect{
     let source_aspect=source.x/source.y.max(1.);let target_aspect=target.x/target.y.max(1.);
@@ -77,7 +77,9 @@ pub fn name(ui: &mut egui::Ui, user: &User, label: &str, size: f32, fallback: Co
     let font = if supported { FontId::new(size, egui::FontFamily::Name(family.into())) } else { FontId::proportional(size) };
     let colors: Vec<_> = data["colors"].as_array().into_iter().flatten().filter_map(Value::as_u64).take(5).map(|c|color(c as u32)).collect();
     let effect = data["effect_id"].as_u64().unwrap_or(1);
-    let animated = ui.ctx().data(|d|d.get_temp::<bool>(egui::Id::new("eclipse-name-animation")).unwrap_or(true)) && matches!(effect, 7 | 8);
+    // Name effects move only while the pointer is over the name (last pass's response).
+    let hovered = ui.ctx().read_response(ui.next_auto_id()).is_some_and(|r|r.hovered());
+    let animated = hovered && ui.ctx().input(|i|i.focused) && ui.ctx().data(|d|d.get_temp::<bool>(egui::Id::new("eclipse-name-animation")).unwrap_or(true)) && matches!(effect, 7 | 8);
     let t = if animated { ui.ctx().input(|i|i.time) as f32 * 0.25 } else { 0. };
     let mut job = egui::text::LayoutJob::default();
     let count = label.chars().count().max(1) as f32;
@@ -111,14 +113,15 @@ pub fn name(ui: &mut egui::Ui, user: &User, label: &str, size: f32, fallback: Co
 #[cfg(test)] mod tests {
     use super::*;
     use serde_json::json;
-    #[test]fn gummy_name_motion_is_finite_and_reduced_motion_disables_it(){
+    #[test]fn gummy_name_motion_is_finite_moves_only_on_hover_and_reduced_motion_disables_it(){
         let ctx=egui::Context::default();crate::widgets::fonts(&ctx);
         let user=User{display_name_styles:Some(json!({"font_id":3,"effect_id":8,"colors":[16711680,65280,255]})),..Default::default()};
-        let mut meshes=vec![];
-        for time in [1.,1.25]{let output=ctx.run(egui::RawInput{time:Some(time),..Default::default()},|ctx|{egui::CentralPanel::default().show(ctx,|ui|{name(ui,&user,"Smooth name",22.,Color32::WHITE);});});
-            let points:Vec<_>=output.shapes.into_iter().filter_map(|s|if let egui::Shape::Text(text)=s.shape{if text.galley.job.text=="Smooth name"{Some(text.galley.rows.iter().flat_map(|r|r.visuals.mesh.vertices.iter().map(|v|v.pos)).collect::<Vec<_>>())}else{None}}else{None}).flatten().collect();assert!(!points.is_empty());assert!(points.iter().all(|p|p.x.is_finite()&&p.y.is_finite()));meshes.push(points);
-        }
-        assert_ne!(meshes[0],meshes[1]);
+        let run=|time:f64,pointer:Option<egui::Pos2>|{let events=pointer.map(|p|vec![egui::Event::PointerMoved(p)]).unwrap_or_else(||vec![egui::Event::PointerGone]);
+            let output=ctx.run(egui::RawInput{time:Some(time),events,..Default::default()},|ctx|{egui::CentralPanel::default().show(ctx,|ui|{name(ui,&user,"Smooth name",22.,Color32::WHITE);});});
+            let points:Vec<_>=output.shapes.into_iter().filter_map(|s|if let egui::Shape::Text(text)=s.shape{if text.galley.job.text=="Smooth name"{Some(text.galley.rows.iter().flat_map(|r|r.visuals.mesh.vertices.iter().map(|v|v.pos)).collect::<Vec<_>>())}else{None}}else{None}).flatten().collect();assert!(!points.is_empty());assert!(points.iter().all(|p|p.x.is_finite()&&p.y.is_finite()));points};
+        let idle=[run(0.5,None),run(1.,None),run(1.25,None)];assert_eq!(idle[1],idle[2]);
+        let over=Some(egui::pos2(30.,20.));run(1.5,over);
+        assert_ne!(run(2.,over),run(2.25,over));
         ctx.data_mut(|d|d.insert_temp(egui::Id::new("eclipse-name-animation"),false));
         let output=ctx.run(Default::default(),|ctx|{egui::CentralPanel::default().show(ctx,|ui|{name(ui,&user,"Smooth name",22.,Color32::WHITE);});});
         assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t)if t.galley.job.text=="Smooth name")));

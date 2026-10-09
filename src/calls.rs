@@ -880,7 +880,7 @@ impl Calls {
                     ui.painter().rect_filled(rect,8,egui::Color32::from_gray(39));
                     if let Some(texture)=self.textures.get(&id){egui::Image::new(texture).corner_radius(8).paint_at(ui,rect);}else{
                         let avatar=egui::Rect::from_center_size(rect.center(),Vec2::splat(76.));ui.painter().circle_filled(avatar.center(),38.,egui::Color32::from_gray(65));
-                        if let Some(texture)=crate::assets::avatar_url(user,None,None).and_then(|url|images.texture(&url,ui.ctx())){egui::Image::new((texture,avatar.size())).corner_radius(38).paint_at(ui,avatar);}else{ui.painter().text(avatar.center(),egui::Align2::CENTER_CENTER,user.name().chars().take(2).collect::<String>(),egui::FontId::proportional(26.),egui::Color32::WHITE);}
+                        if let Some(texture)=crate::assets::avatar_url(user,None,None).and_then(|url|images.texture(&url,avatar,ui.ctx())){egui::Image::new((texture,avatar.size())).corner_radius(38).paint_at(ui,avatar);}else{ui.painter().text(avatar.center(),egui::Align2::CENTER_CENTER,user.name().chars().take(2).collect::<String>(),egui::FontId::proportional(26.),egui::Color32::WHITE);}
                     }
                     if self.speaking.contains(&id){ui.painter().rect_stroke(rect,8,egui::Stroke::new(2.0_f32,egui::Color32::from_rgb(35,165,90)),egui::StrokeKind::Inside);}
                     ui.painter().text(rect.left_bottom()+Vec2::new(12.,-12.),egui::Align2::LEFT_BOTTOM,user.name(),egui::FontId::proportional(14.),egui::Color32::WHITE);

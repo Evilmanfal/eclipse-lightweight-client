@@ -88,7 +88,7 @@ impl Eclipse {
             if let Some(effect)=configs["profile_effect_configs"].as_array().or_else(||configs["profile_effects"].as_array()).into_iter().flatten().find(|e|e["id"].as_str()==Some(&id)){
                 let config=effect.get("config").unwrap_or(effect);let moving=self.prefs.animations&&!self.prefs.reduced_motion;
                 let url=if moving{config["thumbnailPreviewSrc"].as_str().or_else(||config["reducedMotionSrc"].as_str())}else{config["staticFrameSrc"].as_str().or_else(||config["reducedMotionSrc"].as_str())};
-                if let Some(url)=url.filter(|u|assets::public_url(u)){if let Some(texture)=self.images.texture_sized(url,response.response.rect.size(),ctx){let painter=ctx.layer_painter(response.response.layer_id).with_clip_rect(response.response.rect);let rect=response.response.rect;let mesh=egui::Mesh::with_texture(texture);let mut mesh=mesh;mesh.add_rect_with_uv(rect,egui::Rect::from_min_max(egui::Pos2::ZERO,egui::pos2(1.,1.)),Color32::WHITE);painter.add(mesh);}}
+                if let Some(url)=url.filter(|u|assets::public_url(u)){if let Some(texture)=self.images.texture_hover(url,response.response.rect,ctx){let painter=ctx.layer_painter(response.response.layer_id).with_clip_rect(response.response.rect);let rect=response.response.rect;let mesh=egui::Mesh::with_texture(texture);let mut mesh=mesh;mesh.add_rect_with_uv(rect,egui::Rect::from_min_max(egui::Pos2::ZERO,egui::pos2(1.,1.)),Color32::WHITE);painter.add(mesh);}}
             }
         }}
         if let(Some(response),Some(portrait))=(&popout,portrait_marker){crate::presence::paint_badge(&ctx.layer_painter(response.response.layer_id).with_clip_rect(response.response.rect),portrait,self.presences.get(&user.id,self.profile_guild.as_deref()));}
