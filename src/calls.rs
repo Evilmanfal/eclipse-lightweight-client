@@ -88,6 +88,12 @@ pub struct Calls {
     speaking: Vec<u64>,
     frames: Arc<Mutex<HashMap<u64, VideoFrame>>>,
     textures: HashMap<u64, egui::TextureHandle>,
+    /// The watched screen share at full resolution, separate from the small camera tiles.
+    stream_frame: Arc<Mutex<Option<egui::ColorImage>>>,
+    stream_texture: Option<egui::TextureHandle>,
+    /// The watched stream fills the whole call area (no participant strip).
+    pub expanded: bool,
+    fullscreen: bool,
     sink: voice::VideoSink,
     pub status: String,
     error: Option<String>,
@@ -186,6 +192,10 @@ impl Calls {
             rx,
             frames,
             textures: HashMap::new(),
+            stream_frame: Arc::new(Mutex::new(None)),
+            stream_texture: None,
+            expanded: false,
+            fullscreen: false,
             sink,
             status: "No active call".into(),
             error: None,
@@ -752,7 +762,8 @@ impl Calls {
                 let _ = tx.try_send((epoch, Notice::StreamEnded(false, result)));
             }));
         } else if self.watch_key.is_some() && media.watch_task.is_none() {
-            let sink = remote_sink;
+            let _ = remote_sink;
+            let sink = stream_sink(self.stream_frame.clone(), self.active_epoch.clone(), self.epoch, self.ctx.clone());
             let playback = media.stream_playback.clone();
             media.watch_task = Some(media.runtime.spawn(async move {
                 let result =
@@ -854,6 +865,16 @@ impl Calls {
                 self.stop_share();
             }
         }
+        if self.watch_key.is_none() {
+            if self.stream_texture.take().is_some() { if let Ok(mut f) = self.stream_frame.lock() { *f = None; } }
+            self.expanded = false;
+            if self.fullscreen { self.fullscreen = false; self.ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false)); }
+        } else if let Some(image) = self.stream_frame.lock().ok().and_then(|mut f| f.take()) {
+            match &mut self.stream_texture {
+                Some(texture) if texture.size() == image.size => texture.set(image, egui::TextureOptions::LINEAR),
+                _ => self.stream_texture = Some(self.ctx.load_texture("watched-stream", image, egui::TextureOptions::LINEAR)),
+            }
+        }
         if let Ok(mut frames) = self.frames.lock() {
             for frame in frames.drain().map(|(_, f)| f) {
                 if let Some(texture) = self.textures.get_mut(&frame.user) {
@@ -883,13 +904,13 @@ impl Calls {
             egui::ScrollArea::vertical().id_salt("call-tiles").max_height(tiles_height).show(ui,|ui|{
                 let mut participants:Vec<_>=self.participants.values().cloned().collect();participants.sort_by(|a,b|a.id.cmp(&b.id));
                 if let Some(streamer)=self.watching().map(str::to_owned){
-                    // The watched stream takes the stage, like Discord; everyone else sits in a strip below.
-                    let width=ui.available_width();let height=(width*0.5625).min(tiles_height-150.).max(160.);
-                    let (rect,response)=ui.allocate_exact_size(Vec2::new(width,height),egui::Sense::hover());
+                    // The watched stream takes the stage, like Discord; everyone else sits in a strip below
+                    // unless the stream is expanded.
+                    let width=ui.available_width();
+                    let height=if self.expanded{(tiles_height-44.).max(160.)}else{(width*0.5625).min(tiles_height-150.).max(160.)};
+                    let (rect,response)=ui.allocate_exact_size(Vec2::new(width,height),egui::Sense::click());
                     ui.painter().rect_filled(rect,8,egui::Color32::BLACK);
-                    let id=streamer.parse::<u64>().unwrap_or(0);
-                    let texture=self.textures.get(&id).or_else(||self.textures.iter().find(|(id,_)|!self.participants.contains_key(&id.to_string())).map(|(_,t)|t));
-                    if let Some(texture)=texture{
+                    if let Some(texture)=&self.stream_texture{
                         let size=texture.size_vec2();let scale=(rect.width()/size.x.max(1.)).min(rect.height()/size.y.max(1.));
                         egui::Image::new(texture).corner_radius(8).paint_at(ui,egui::Rect::from_center_size(rect.center(),size*scale));
                     }else{
@@ -897,14 +918,20 @@ impl Calls {
                     }
                     let name=self.participants.get(&streamer).map(|u|u.name().to_owned()).unwrap_or_default();
                     live_badge(ui,rect.left_top()+Vec2::new(12.,12.));
-                    ui.painter().text(rect.left_bottom()+Vec2::new(12.,-12.),egui::Align2::LEFT_BOTTOM,name,egui::FontId::proportional(14.),egui::Color32::WHITE);
-                    if response.hovered()||ui.rect_contains_pointer(rect){
-                        let button=egui::Rect::from_min_size(egui::pos2(rect.right()-132.,rect.top()+10.),Vec2::new(120.,28.));
+                    if response.double_clicked(){self.toggle_fullscreen();}
+                    if ui.rect_contains_pointer(rect){
+                        ui.painter().text(rect.left_bottom()+Vec2::new(12.,-12.),egui::Align2::LEFT_BOTTOM,name,egui::FontId::proportional(14.),egui::Color32::WHITE);
+                        let button=egui::Rect::from_min_size(egui::pos2(rect.right()-128.,rect.top()+10.),Vec2::new(116.,30.));
                         if overlay_button(ui,button,egui::Id::new("stop-watching"),"Stop Watching",egui::Color32::from_rgb(218,55,60)){stop=true;}
+                        let full=egui::Rect::from_min_size(rect.right_bottom()-Vec2::new(46.,46.),Vec2::splat(34.));
+                        if icon_button(ui,full,egui::Id::new("stream-fullscreen"),if self.fullscreen{"Exit full screen"}else{"Full screen"},|p,c,s|{for (dx,dy) in [(-1.,-1.),(1.,-1.),(-1.,1.),(1.,1.)]{let corner=c+Vec2::new(dx*8.,dy*8.);p.line_segment([corner,corner-Vec2::new(dx*5.,0.)],s);p.line_segment([corner,corner-Vec2::new(0.,dy*5.)],s);}}){self.toggle_fullscreen();}
+                        let grow=egui::Rect::from_min_size(full.min-Vec2::new(42.,0.),Vec2::splat(34.));
+                        let expanded=self.expanded;
+                        if icon_button(ui,grow,egui::Id::new("stream-expand"),if expanded{"Show participants"}else{"Enlarge stream"},|p,c,s|{let r=egui::Rect::from_center_size(c,Vec2::new(18.,12.));p.rect_stroke(r,2,s,egui::StrokeKind::Middle);if expanded{p.line_segment([r.left_bottom()+Vec2::new(0.,4.),r.right_bottom()+Vec2::new(0.,4.)],s);}}){self.expanded=!self.expanded;}
                     }
                     ui.horizontal(|ui|{let max=if self.prefs.volume_booster{1000}else{200};if ui.add(egui::Slider::new(&mut self.stream_volume,0..=max).text("Stream volume %")).changed(){self.apply_controls();}});
                     ui.add_space(8.);
-                    ui.horizontal_wrapped(|ui|{for user in &participants{let (rect,_)=ui.allocate_exact_size(Vec2::new(160.,90.),egui::Sense::hover());if self.tile(ui,images,user,rect,true){watch=Some(user.id.clone());}}});
+                    if !self.expanded{ui.horizontal_wrapped(|ui|{for user in &participants{let (rect,_)=ui.allocate_exact_size(Vec2::new(160.,90.),egui::Sense::hover());if self.tile(ui,images,user,rect,true){watch=Some(user.id.clone());}}});}
                 }else{
                     let width=((ui.available_width()-12.)/2.).max(150.);
                     for row in participants.chunks(2){ui.horizontal_top(|ui|{for user in row {
@@ -927,6 +954,36 @@ impl Calls {
             ui.add_space(8.);ui.vertical_centered(|ui|{if self.prefs.push_to_talk{ui.small(if hotkey_open(self.ptt.load(Ordering::Acquire),key_down){"Push to talk · microphone open"}else{"Push to talk · hold your hotkey to speak"});}ui.weak("Native encrypted media · live Discord interoperability remains unverified");});
         });ui.ctx().request_repaint_after(Duration::from_millis(33));
     }
+    pub fn toggle_fullscreen(&mut self){
+        self.fullscreen=!self.fullscreen;self.expanded=self.fullscreen||self.expanded;
+        self.ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
+    }
+    pub fn fullscreen(&self)->bool{self.fullscreen&&self.watch_key.is_some()}
+    /// While watching from a text channel: the stream in a small movable window in the corner,
+    /// like Discord's picture in picture. Clicking it returns to the call.
+    fn picture_in_picture(&mut self,ctx:&egui::Context){
+        let Some(texture)=self.stream_texture.clone() else{return};
+        let name=self.watching().and_then(|id|self.participants.get(id)).map(|u|u.name().to_owned()).unwrap_or_default();
+        let size=Vec2::new(320.,180.);
+        let mut back=false;
+        egui::Area::new(egui::Id::new("stream-pip")).order(egui::Order::Foreground).movable(true)
+            .default_pos(ctx.screen_rect().right_bottom()-size-Vec2::new(24.,96.))
+            .show(ctx,|ui|{
+                let (rect,response)=ui.allocate_exact_size(size,egui::Sense::click());
+                ui.painter().rect_filled(rect,10,egui::Color32::BLACK);
+                let image=texture.size_vec2();let scale=(rect.width()/image.x.max(1.)).min(rect.height()/image.y.max(1.));
+                egui::Image::new(&texture).corner_radius(10).paint_at(ui,egui::Rect::from_center_size(rect.center(),image*scale));
+                ui.painter().rect_stroke(rect,10,egui::Stroke::new(1.0_f32,egui::Color32::from_gray(70)),egui::StrokeKind::Inside);
+                live_badge(ui,rect.left_top()+Vec2::new(8.,8.));
+                if response.hovered(){
+                    ui.painter().rect_filled(rect,10,egui::Color32::from_black_alpha(90));
+                    ui.painter().text(rect.center(),egui::Align2::CENTER_CENTER,"Click to return to the stream",egui::FontId::proportional(13.),egui::Color32::WHITE);
+                    ui.painter().text(rect.left_bottom()+Vec2::new(10.,-8.),egui::Align2::LEFT_BOTTOM,name,egui::FontId::proportional(12.),egui::Color32::WHITE);
+                }
+                if response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked(){back=true;}
+            });
+        if back{self.chat=false;}
+    }
     /// One participant tile: camera or avatar, name, speaking outline, and for someone who is live,
     /// a LIVE badge and a Watch Stream button. Returns true when Watch Stream was clicked.
     fn tile(&mut self,ui:&mut egui::Ui,images:&mut crate::assets::Images,user:&User,rect:egui::Rect,small:bool)->bool{
@@ -944,12 +1001,15 @@ impl Calls {
         ui.painter().text(rect.left_bottom()+Vec2::new(10.,-10.),egui::Align2::LEFT_BOTTOM,user.name(),egui::FontId::proportional(if small{12.}else{14.}),egui::Color32::WHITE);
         if !live{return false;}
         live_badge(ui,rect.left_top()+Vec2::new(10.,10.));
-        let size=if small{Vec2::new(104.,26.)}else{Vec2::new(130.,34.)};
-        let button=egui::Rect::from_center_size(if small{rect.center()}else{rect.center()+Vec2::new(0.,38.)},size);
-        overlay_button(ui,button,egui::Id::new(("watch-stream",&user.id)),"Watch Stream",egui::Color32::from_rgb(88,101,242))
+        let size=if small{Vec2::new(96.,24.)}else{Vec2::new(118.,28.)};
+        let button=egui::Rect::from_center_size(if small{rect.center()}else{rect.center()+Vec2::new(0.,36.)},size);
+        watch_pill(ui,button,egui::Id::new(("watch-stream",&user.id)))
     }
     /// Offline preview screenshots: one peer is live, or the share picker is open.
-    pub fn preview_live(&mut self,watching:bool){if let (Some(channel),Some(peer))=(self.channel.clone(),self.participants.keys().find(|id|Some(*id)!=self.user.as_ref().map(|u|&u.id)).cloned()){let key=stream_key(&channel,&peer);self.streams.push((key.clone(),peer));if watching{self.watch_key=Some(key);}}}
+    pub fn preview_live(&mut self,watching:bool){if let (Some(channel),Some(peer))=(self.channel.clone(),self.participants.keys().find(|id|Some(*id)!=self.user.as_ref().map(|u|&u.id)).cloned()){let key=stream_key(&channel,&peer);self.streams.push((key.clone(),peer));if watching{self.watch_key=Some(key);
+        // A test pattern stands in for the stream picture offline.
+        let image=egui::ColorImage::new([1280,720],(0..1280*720).map(|i|egui::Color32::from_rgb((i%1280*255/1280) as u8,(i/1280*255/720) as u8,160)).collect());
+        if let Ok(mut frame)=self.stream_frame.lock(){*frame=Some(image);}}}}
     pub fn preview_picker(&mut self){
         use voice::screen::{Source,SourceId};
         self.sources=vec![Source{id:SourceId::Display(1),name:"Screen 1".into()},Source{id:SourceId::Display(2),name:"Screen 2".into()},Source{id:SourceId::Window(3),name:"Spotify Premium".into()},Source{id:SourceId::Window(4),name:"Visual Studio Code".into()}];
@@ -963,6 +1023,12 @@ impl Calls {
     pub fn show(&mut self, ctx: &egui::Context, _images: &mut crate::assets::Images) -> Vec<Value> {
         if self.share_picker {
             self.share_picker_modal(ctx);
+        }
+        if self.chat && self.watch_key.is_some() {
+            self.picture_in_picture(ctx);
+        }
+        if self.fullscreen && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.toggle_fullscreen();
         }
         if let Some(error) = self.error.clone() {
             egui::Window::new("Call error")
@@ -1117,6 +1183,7 @@ impl Calls {
         if self.watch_key.take().is_none(){return;}
         if let Some(media)=&mut self.media{if let Some(task)=media.watch_task.take(){task.abort();}}
         self.textures.clear();
+        self.expanded=false;
     }
     pub fn muted(&self)->bool{self.muted}
     pub fn deafened(&self)->bool{self.deafened}
@@ -1138,6 +1205,28 @@ fn hotkey_open(config:u64,down:impl Fn(i32)->bool)->bool{
     if config&(1<<16)==0{return true;}
     down((config&255)as i32)&&((config&(1<<8)==0)||down(0x11))&&((config&(1<<9)==0)||down(0x10))&&((config&(1<<10)==0)||down(0x12))
 }
+/// Discord-style Watch Stream pill: a rounded blurple button with a small screen glyph.
+pub fn watch_pill(ui:&egui::Ui,rect:egui::Rect,id:egui::Id)->bool{
+    let response=ui.interact(rect,id,egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let fill=if response.hovered(){egui::Color32::from_rgb(71,82,196)}else{egui::Color32::from_rgb(88,101,242)};
+    ui.painter().rect_filled(rect,rect.height()/2.,fill);
+    let text=ui.painter().layout_no_wrap("Watch Stream".into(),egui::FontId::proportional((rect.height()*0.45).clamp(10.,13.)),egui::Color32::WHITE);
+    let glyph=Vec2::new(11.,8.);let total=glyph.x+5.+text.size().x;
+    let left=rect.center().x-total/2.;
+    let screen=egui::Rect::from_min_size(egui::pos2(left,rect.center().y-glyph.y/2.-1.),glyph);
+    let stroke=egui::Stroke::new(1.3_f32,egui::Color32::WHITE);
+    ui.painter().rect_stroke(screen,1.5,stroke,egui::StrokeKind::Middle);
+    ui.painter().line_segment([screen.center_bottom()+Vec2::new(-3.,2.5),screen.center_bottom()+Vec2::new(3.,2.5)],stroke);
+    ui.painter().galley(egui::pos2(left+glyph.x+5.,rect.center().y-text.size().y/2.),text,egui::Color32::WHITE);
+    response.clicked()
+}
+/// A round icon button painted over the stream.
+fn icon_button(ui:&egui::Ui,rect:egui::Rect,id:egui::Id,tip:&str,draw:impl Fn(&egui::Painter,egui::Pos2,egui::Stroke))->bool{
+    let response=ui.interact(rect,id,egui::Sense::click()).on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand);
+    ui.painter().rect_filled(rect,8,egui::Color32::from_black_alpha(if response.hovered(){200}else{140}));
+    draw(ui.painter(),rect.center(),egui::Stroke::new(1.6_f32,egui::Color32::WHITE));
+    response.clicked()
+}
 /// A button painted over a tile without taking part in the tile layout.
 fn overlay_button(ui:&egui::Ui,rect:egui::Rect,id:egui::Id,label:&str,fill:egui::Color32)->bool{
     let response=ui.interact(rect,id,egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -1145,6 +1234,21 @@ fn overlay_button(ui:&egui::Ui,rect:egui::Rect,id:egui::Id,label:&str,fill:egui:
     ui.painter().rect_filled(rect,6,fill);
     ui.painter().text(rect.center(),egui::Align2::CENTER_CENTER,label,egui::FontId::proportional(14.),egui::Color32::WHITE);
     response.clicked()
+}
+/// Screen shares skip the 640x360 camera path: each decoded picture goes to the screen at its
+/// own resolution (only pictures over 1080p are scaled down), replacing any frame not yet shown.
+fn stream_sink(latest:Arc<Mutex<Option<egui::ColorImage>>>,active:Arc<AtomicU64>,epoch:u64,repaint:egui::Context)->voice::VideoSink{
+    Arc::new(move|frame|{
+        let (width,height)=(frame.width as usize,frame.height as usize);
+        if active.load(Ordering::Acquire)!=epoch||width==0||height==0||frame.rgba.len()!=width*height*4{return;}
+        let image=if width<=1920&&height<=1080{egui::ColorImage::from_rgba_premultiplied([width,height],frame.rgba)}
+            else if let Some(image)=image::RgbaImage::from_raw(frame.width,frame.height,frame.rgba.to_vec()){
+                let image=image::DynamicImage::ImageRgba8(image).resize(1920,1080,image::imageops::FilterType::Triangle).to_rgba8();
+                egui::ColorImage::from_rgba_premultiplied([image.width() as usize,image.height() as usize],image.as_raw())
+            }else{return};
+        if let Ok(mut latest)=latest.lock(){*latest=Some(image);}
+        repaint.request_repaint();
+    })
 }
 /// Discord's red LIVE pill.
 fn live_badge(ui:&egui::Ui,at:egui::Pos2){
@@ -1275,6 +1379,18 @@ mod tests {
         calls.server_deafened=true;assert!(!calls.self_speaking());calls.server_deafened=false;
         calls.speaking=vec![99];assert!(!calls.self_speaking());
         calls.speaking=vec![56];calls.channel=None;assert!(!calls.self_speaking());
+    }
+    #[test]
+    fn watched_streams_keep_their_resolution_up_to_1080p(){
+        let latest=Arc::new(Mutex::new(None));let active=Arc::new(AtomicU64::new(7));
+        let sink=stream_sink(latest.clone(),active.clone(),7,egui::Context::default());
+        let frame=|w:u32,h:u32|vec![255u8;(w*h*4) as usize];
+        let pixels=frame(1280,720);sink(voice::RemoteFrame{user:1,width:1280,height:720,rgba:&pixels});
+        assert_eq!(latest.lock().unwrap().take().map(|i:egui::ColorImage|i.size),Some([1280,720]),"720p is shown at 720p, not shrunk");
+        let pixels=frame(2560,1440);sink(voice::RemoteFrame{user:1,width:2560,height:1440,rgba:&pixels});
+        assert_eq!(latest.lock().unwrap().take().map(|i:egui::ColorImage|i.size),Some([1920,1080]));
+        active.store(8,Ordering::Release);let pixels=frame(4,4);sink(voice::RemoteFrame{user:1,width:4,height:4,rgba:&pixels});
+        assert!(latest.lock().unwrap().is_none(),"frames from an old call are dropped");
     }
     #[test]
     fn push_to_talk_ring_follows_the_key_not_the_microphone(){

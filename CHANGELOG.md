@@ -1,5 +1,9 @@
 # Unreleased
 
+- Sharper, smoother screen shares: watched streams are shown at their own resolution (up to 1080p) instead of being shrunk to 640x360 on the CPU for every frame.
+- Enlarge a stream you're watching: hover it for Enlarge (hides the participant strip) and Full screen (double-click also works; Esc leaves).
+- Picture in picture: clicking a text channel while watching keeps the stream in a small movable window in the corner; click it to return to the stream.
+- The Watch Stream buttons are smaller rounded pills with a screen icon.
 - Mentions read as names: <@id> shows as @name, role mentions as @role and channel links as #channel, in messages and reply previews.
 - Typing @ in the message box lists who you can mention (members, plus @everyone and @here where you're allowed), filtered as you type. Arrow keys or the mouse choose, Tab or Enter inserts; the name is sent as a real mention.
 - Reply puts the cursor straight into the message box.

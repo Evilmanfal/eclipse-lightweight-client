@@ -140,7 +140,7 @@ impl Eclipse {
                 let before=ui.cursor().min;self.avatar_with_status(ui,&user,None,22.,false);
                 if speaking{ui.painter().circle_stroke(before+Vec2::splat(11.),12.,Stroke::new(2.0_f32,Color32::from_rgb(67,181,129)));}
                 // Reserve room for the state icons so long names truncate instead of pushing them off.
-                let icons=if own{22.}else{if deafened||muted{20.}else{0.}}+if state.video{20.}else{0.}+if offer{92.}else if state.streaming{34.}else{0.};
+                let icons=if own{22.}else{if deafened||muted{20.}else{0.}}+if state.video{20.}else{0.}+if offer{86.}else if state.streaming{34.}else{0.};
                 ui.allocate_ui_with_layout(Vec2::new((ui.available_width()-icons).max(20.),22.),egui::Layout::left_to_right(egui::Align::Center),|ui|{
                     ui.add(egui::Label::new(RichText::new(&name).size(12.).color(if speaking{TEXT}else{MUTED})).truncate());
                 });
@@ -154,7 +154,8 @@ impl Eclipse {
                     }
                     if state.video{bar_control(ui,Control::Camera,false,18.,"Camera on");}
                     if offer{
-                        if ui.add(egui::Button::new(RichText::new("Watch Stream").size(11.).strong().color(Color32::WHITE)).fill(Color32::from_rgb(88,101,242)).corner_radius(4)).clicked(){watch=Some(state.user_id.clone());}
+                        let (rect,_)=ui.allocate_exact_size(Vec2::new(84.,18.),egui::Sense::hover());
+                        if crate::calls::watch_pill(ui,rect,egui::Id::new(("sidebar-watch",&state.user_id))){watch=Some(state.user_id.clone());}
                     }else if state.streaming{
                         let galley=ui.painter().layout_no_wrap("LIVE".into(),egui::FontId::proportional(9.),Color32::WHITE);
                         let (rect,response)=ui.allocate_exact_size(galley.size()+Vec2::new(8.,4.),egui::Sense::hover());

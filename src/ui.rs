@@ -380,7 +380,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             "roles"=>{self.server_settings=true;self.server_page="Roles".into();},
             "friends"=>{self.navigate_home(Home::Friends);self.friend_filter="All".into();},
             "nitro"=>self.navigate_home(Home::Nitro),"shop"=>self.navigate_home(Home::Shop),"quests"=>self.navigate_home(Home::Quests),
-            "call-live"|"call-watching"|"share-picker"=>{if let(Some(channel),Some(user))=(self.channel.clone(),self.user.clone()){let mut seen=HashSet::new();let peers=self.messages.iter().map(|m|m.author.clone()).filter(|u|u.id!=user.id&&seen.insert(u.id.clone())).take(3).collect();self.calls.preview(channel,user,peers);if section!="share-picker"{self.calls.preview_live(section=="call-watching");}else{self.calls.preview_picker();}}},
+            "call-live"|"call-watching"|"stream-pip"|"stream-expanded"|"share-picker"=>{if let(Some(channel),Some(user))=(self.channel.clone(),self.user.clone()){let mut seen=HashSet::new();let peers=self.messages.iter().map(|m|m.author.clone()).filter(|u|u.id!=user.id&&seen.insert(u.id.clone())).take(3).collect();self.calls.preview(channel,user,peers);if section!="share-picker"{self.calls.preview_live(section!="call-live");self.calls.chat=section=="stream-pip";self.calls.expanded=section=="stream-expanded";}else{self.calls.preview_picker();}}},
             "call"=>{if let(Some(channel),Some(user))=(self.channel.clone(),self.user.clone()){let mut seen=HashSet::new();let peers=self.messages.iter().map(|m|m.author.clone()).filter(|u|u.id!=user.id&&seen.insert(u.id.clone())).take(3).collect();self.calls.preview(channel,user,peers);}},
             _=>{}
         }
@@ -472,6 +472,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
         }
     }
     fn select_channel(&mut self, channel: Channel) {
+        if self.calls.active() && channel.kind != 2 { self.calls.chat = true; }
         self.home=Home::Chat;
         self.profile=None;
         self.reply=None;
@@ -2064,7 +2065,9 @@ impl eframe::App for Eclipse {
                 }
             }
         }
-        egui::TopBottomPanel::bottom("status")
+        // Full-screen stream: nothing but the call stage.
+        let full = self.user.is_some() && self.calls.fullscreen();
+        if !full { egui::TopBottomPanel::bottom("status")
             .exact_height(if self.compact { 22.0 } else { 28.0 })
             .frame(
                 egui::Frame::NONE
@@ -2096,9 +2099,12 @@ impl eframe::App for Eclipse {
                         ui.label(RichText::new(&self.status).size(11.0).color(MUTED));
                     });
                 });
-            });
+            }); }
         if self.user.is_none() {
             self.login(ctx);
+        } else if full {
+            self.sync_call_roster();
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(Color32::BLACK)).show(ctx,|ui|self.calls.stage(ui,&mut self.images));
         } else {
             self.left_column(ctx);
             if self.home!=Home::Chat{self.home_panel(ctx);}else{self.conversation_header(ctx);if self.calls.active(){self.sync_call_roster();}if self.calls.active()&&!self.calls.chat{egui::CentralPanel::default().frame(egui::Frame::NONE.fill(preferences_bg(&self.prefs)).inner_margin(if self.compact{0}else{8})).show(ctx,|ui|self.calls.stage(ui,&mut self.images));}else{self.members(ctx);self.conversation(ctx);}}
