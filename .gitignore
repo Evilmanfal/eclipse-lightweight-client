@@ -1,0 +1,9 @@
+/target/
+/data/
+*.pdb
+/eclipse-settings.json
+/eclipse-settings.json.tmp
+
+# Built binaries are published as GitHub Releases, not committed.
+/Eclipse.exe
+*.zip

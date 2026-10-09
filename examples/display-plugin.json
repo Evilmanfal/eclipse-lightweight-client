@@ -1,0 +1,6 @@
+{
+  "name": "Local greeting display",
+  "description": "Example: replace a greeting on screen only; original and outgoing messages stay unchanged.",
+  "enabled": false,
+  "replacements": [{"find": "hello", "display": "hey"}]
+}

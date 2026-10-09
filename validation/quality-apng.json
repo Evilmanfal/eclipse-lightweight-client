@@ -1,0 +1,11 @@
+﻿{
+    "cycle_ms":  1020,
+    "decoded":  true,
+    "first_size":  [
+                       243,
+                       122
+                   ],
+    "frames":  60,
+    "pixel_bytes":  7115040,
+    "executable_sha256":  "7655a6365750cf7efb7053d706063ce62c89f55fb2912637c78876ff1d69795f"
+}

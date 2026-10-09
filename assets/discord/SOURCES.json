@@ -1,0 +1,30 @@
+[
+  {
+    "file": "nitro-background.png",
+    "url": "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/68888f017bef66840aa37d14_Nitro-bg.png",
+    "page": "https://discord.com/nitro",
+    "sha256": "68323e6930c7d54315669c5c9028ff393941816dc3394298d1d89e7f68a241d8",
+    "bytes": 18215
+  },
+  {
+    "file": "nitro-wumpus.webp",
+    "url": "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/688bbfec88fb6c55f8e87c0f_imgonline-com-ua-Resize-JSJAo2mDwZhTEs.webp",
+    "page": "https://discord.com/nitro",
+    "sha256": "178caa715c68ca09b849fe1e8eaebd2f9d2124d6fa2c600fedf198c0f90a2b10",
+    "bytes": 52878
+  },
+  {
+    "file": "shop-banner.png",
+    "url": "https://cdn.prod.website-files.com/5f9072399b2640f14d6a2bf4/65650a4e1469447afe380df2_DIS_Shop-for-all_Blog-header_V1.png",
+    "page": "https://discord.com/blog/complete-your-look-in-the-shop-now-open-to-all",
+    "sha256": "28c1277a3edf9f994446be7672fcfd7670a2cf981ae8f60c9c2782baa1a24698",
+    "bytes": 559044
+  },
+  {
+    "file": "quests-banner.webp",
+    "url": "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/69ee6216565dd8da56ed5245_ads-hero-bg.webp",
+    "page": "https://discord.com/ads/quests",
+    "sha256": "dc42c4672c126cd8db4d1e865c0246ffb19bec2b3442ed99469c3a427efd30bb",
+    "bytes": 30422
+  }
+]

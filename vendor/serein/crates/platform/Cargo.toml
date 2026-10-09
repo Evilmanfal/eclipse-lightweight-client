@@ -1,0 +1,8 @@
+[package]
+name="platform"
+version="0.1.0"
+edition="2024"
+license="MIT OR Apache-2.0"
+[dependencies]
+windows-core="=0.61.2"
+windows = {version="=0.61.3", features=["Win32_Foundation","Win32_Graphics_Direct3D","Win32_Graphics_Direct3D11","Win32_Graphics_Dxgi_Common","Win32_Media_MediaFoundation","Win32_System_Com","Win32_System_Com_StructuredStorage","Win32_System_Variant"]}

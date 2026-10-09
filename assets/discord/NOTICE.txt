@@ -1,0 +1,6 @@
+These images are original Discord artwork fetched from Discord's public Nitro,
+Shop announcement and Quests pages. Exact page/CDN URLs and SHA-256 hashes are
+recorded in SOURCES.json. Discord and its artists retain all rights to this
+artwork and branding. They are not relicensed under Eclipse's MIT license.
+Eclipse is independent and is not endorsed by Discord. Bundled illustrations
+are not current offers, proof of entitlement or earned rewards.

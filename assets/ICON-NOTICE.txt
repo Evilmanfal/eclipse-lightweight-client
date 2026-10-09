@@ -1,0 +1,1 @@
+Original Eclipse mark, created for this client. MIT license, same as Eclipse. SVG source, PNG and multi-resolution Windows ICO are included.

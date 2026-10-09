@@ -1,0 +1,88 @@
+warn: could not canonicalize path C:\Users\Jason\Documents\Codex\2026-10-08\can-x20\outputs\eclipse-native
+warn: could not canonicalize path C:\Users\Jason\Documents\Codex\2026-10-08\can-x20\outputs
+warn: could not canonicalize path C:\Users\Jason\Documents\Codex\2026-10-08\can-x20
+warn: could not canonicalize path C:\Users\Jason\Documents\Codex\2026-10-08
+warn: could not canonicalize path C:\Users\Jason\Documents\Codex
+warn: could not canonicalize path C:\Users\Jason\Documents
+warn: could not canonicalize path C:\Users\Jason
+warn: could not canonicalize path C:\Users
+warn: could not canonicalize path C:\
+   Compiling eclipse-native v0.8.0 (C:\Users\Jason\Documents\Codex\2026-10-08\can-x20\outputs\eclipse-native)
+    Finished `release` profile [optimized] target(s) in 54.15s
+     Running unittests src\main.rs (C:/Users/Jason/Documents/Codex/2026-10-08/can-x20/work/target-media\release\deps\eclipse_native-493b562da1027759.exe)
+
+running 71 tests
+test assets::tests::builds_cdn_urls_and_selects_modern_legacy_and_guild_avatars ... ok
+test assets::tests::sixty_fps_playback_does_not_retain_the_old_thirty_fps_upload_gate ... ok
+test backend::tests::route_buckets_do_not_stall_other_channels_but_global_limits_do ... ok
+test calls::tests::changing_the_hotkey_replaces_the_active_gate ... ok
+test backend::tests::cancellation_prevents_network_requests ... ok
+test calls::tests::join_and_leave_signal_scope ... ok
+test calls::tests::modifier_only_bindings_open_and_release_the_microphone_gate ... ok
+test calls::tests::old_callbacks_and_unrelated_servers_cannot_change_new_call ... ok
+test calls::tests::own_speaking_indicator_requires_connected_unmuted_transport_activity ... ok
+test calls::tests::pre_call_mute_and_boosted_volume_are_preserved_and_bounded ... ok
+test calls::tests::push_to_talk_releases_on_key_or_modifier_release ... ok
+test calls::tests::successful_voice_connection_and_leave_play_once_and_respect_sounds_setting ... ok
+test community::tests::permission_hierarchy_and_unknown_members ... ok
+test community::tests::secrets_are_removed_recursively ... ok
+test folders::tests::decodes_real_wire_types_wrappers_and_large_snowflakes ... ok
+test backend::tests::auth_errors_do_not_echo_server_body_or_token ... ok
+test backend::tests::imports_account_folders_and_accepts_only_relevant_gateway_updates ... ok
+test backend::tests::gif_search_uses_current_provider_and_preserves_preview ... ok
+test backend::tests::sends_message_with_nonce_and_auth_to_expected_route ... ok
+test hotkey::tests::records_standalone_modifiers_and_chords_on_release ... ok
+test assets::tests::rejects_oversized_and_broken_images_and_bounds_decoded_pixels ... ok
+test folders::tests::keeps_folder_order_deduplicates_and_preserves_new_servers ... ok
+test identity::tests::partial_profile_does_not_erase_identity_and_tags_require_opt_in ... ok
+test identity::tests::profile_assets_are_scoped_and_cannot_escape_cdn_paths ... ok
+test backend::tests::falls_back_to_legacy_folders_without_writing_settings ... ok
+test media_picker::tests::custom_emoji_tokens_and_urls ... ok
+test community::tests::member_events_are_scoped_and_bounded ... ok
+test message_media::tests::hides_only_rendered_media_links_and_keeps_surrounding_words ... ok
+test message_media::tests::unicode_and_custom_keep_surrounding_text ... ok
+test message_time::tests::same_day_is_time_only_and_prior_calendar_days_have_dates ... ok
+test model::tests::validates_links_without_allowing_local_programs ... ok
+test model::tests::validates_token_without_changing_it ... ok
+test model::tests::sorts_discord_history_chronologically ... ok
+test model::tests::deduplicates_gateway_and_rest_messages_and_bounds_history ... ok
+test navigation::tests::caches_are_bounded_and_guilds_stay_separate ... ok
+test navigation::tests::revisits_keep_latest_messages_and_invalidation_drops_stale_history ... ok
+test people::tests::name_search_matches_nicknames_deduplicates_and_excludes_self_and_blocks ... ok
+test preferences::tests::display_plugins_cannot_change_original_message ... ok
+test preferences::tests::imports_only_literal_theme_colors ... ok
+test preferences::tests::legacy_theme_upgrade_keeps_hotkeys_and_custom_palettes ... ok
+test assets::tests::decodes_gif_timing_loops_thins_long_cycles_and_pauses_offscreen ... ok
+test preferences::tests::preferences_are_bounded_and_contain_no_credentials ... ok
+test presence::tests::snapshots_updates_and_unknown ... ok
+test sounds::tests::six_feedback_cues_are_distinct_bounded_pcm ... ok
+test timeline::tests::attachment_edits_are_retained_but_embed_refreshes_and_duplicate_updates_are_not ... ok
+test timeline::tests::delete_snapshots_survive_channel_reload_without_duplicates_or_cross_channel_leaks ... ok
+test message_time::tests::iso_offsets_fractions_leap_dates_and_local_midnight_are_handled ... ok
+test message_media::tests::right_click_opens_a_menu_on_selectable_message_text ... ok
+test settings_layout::tests::settings_backdrop_dismisses_but_content_click_does_not ... ok
+test media_picker::tests::pickers_follow_their_anchor_stay_on_screen_and_dismiss ... ok
+test identity::tests::gummy_name_motion_is_finite_and_reduced_motion_disables_it ... ok
+test ui::interaction_tests::dm_dropdown_is_anchored_clamped_and_dismisses_on_escape ... ok
+test ui::interaction_tests::online_count_is_small_scoped_to_servers_and_excludes_offline_unknown ... ok
+test ui::interaction_tests::composer_enter_sends_shift_enter_inserts_newline_and_unfocused_enter_does_nothing ... ok
+test ui::interaction_tests::dm_context_menu_exposes_user_actions_without_a_recipient_submenu ... ok
+test ui::interaction_tests::profile_popout_stays_on_screen_and_closes_on_outside_click_and_escape ... ok
+test ui::interaction_tests::repeated_chat_author_avatars_each_open_their_own_anchor ... ok
+test ui::panels::store::tests::catalog_uses_each_items_actual_asset_and_effect_config ... ok
+test ui::panels::store::tests::quest_art_resolves_filenames_and_root_paths_to_matching_quests ... ok
+test zoom::tests::ctrl_wheel_zooms_in_out_and_consumes_scroll_but_plain_wheel_does_not ... ok
+test ui::interaction_tests::server_channels_start_below_the_header_without_search_or_redundant_label ... ok
+test widgets::tests::entire_navigation_row_accepts_clicks ... ok
+test ui::interaction_tests::stale_profile_response_cannot_replace_another_server_profile ... ok
+test widgets::tests::decorated_channel_names_have_glyphs ... ok
+test widgets::tests::bundled_name_fonts_are_readable_and_keep_unicode_fallbacks ... ok
+test ui::interaction_tests::shift_message_controls_edit_and_request_delete_only_when_permitted ... ok
+test ui::interaction_tests::both_settings_panels_close_on_outside_click_and_keep_inside_clicks ... ok
+test ui::interaction_tests::server_icon_name_and_caret_open_the_same_anchored_menu ... ok
+test assets::tests::display_sizing_keeps_large_art_sharp_and_animation_resolution_bounded ... ok
+test backend::tests::honors_429_then_accepts_empty_delete_response ... ok
+test assets::tests::cache_evicts_old_images_and_discards_inflight_images_after_clear ... ok
+
+test result: ok. 71 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s
+

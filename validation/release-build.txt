@@ -1,0 +1,11 @@
+warn: could not canonicalize path C:\Users\Jason\Documents\Codex\2026-10-08\can-x20\outputs\eclipse-native
+warn: could not canonicalize path C:\Users\Jason\Documents\Codex\2026-10-08\can-x20\outputs
+warn: could not canonicalize path C:\Users\Jason\Documents\Codex\2026-10-08\can-x20
+warn: could not canonicalize path C:\Users\Jason\Documents\Codex\2026-10-08
+warn: could not canonicalize path C:\Users\Jason\Documents\Codex
+warn: could not canonicalize path C:\Users\Jason\Documents
+warn: could not canonicalize path C:\Users\Jason
+warn: could not canonicalize path C:\Users
+warn: could not canonicalize path C:\
+   Compiling eclipse-native v0.8.0 (C:\Users\Jason\Documents\Codex\2026-10-08\can-x20\outputs\eclipse-native)
+    Finished `release` profile [optimized] target(s) in 54.73s

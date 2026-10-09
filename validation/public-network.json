@@ -1,0 +1,6 @@
+{
+  "authenticated": false,
+  "discovery_url": "wss://gateway.discord.gg",
+  "gateway_hello": true,
+  "https": true
+}

@@ -1,0 +1,24 @@
+[workspace]
+members=["crates/discord-voice","crates/platform","crates/model","crates/client-core"]
+resolver="2"
+[workspace.package]
+version="0.1.0"
+edition="2024"
+rust-version="1.98"
+license="MIT OR Apache-2.0"
+[workspace.dependencies]
+client-core={path="crates/client-core"}
+model={path="crates/model"}
+platform={path="crates/platform"}
+tokio={version="1.50",features=["rt-multi-thread","macros","sync","time","net","io-util","fs"]}
+tokio-tungstenite={version="0.30",default-features=false,features=["connect","rustls-tls-webpki-roots"]}
+futures-util={version="0.3",features=["sink","std"]}
+serde_json="1"
+zeroize="1"
+url="2"
+getrandom="0.4"
+
+[patch.crates-io]
+libopus_sys={path="../libopus_sys"}
+davey={path="vendor/davey"}
+hpke-rs={path="vendor/hpke-rs"}

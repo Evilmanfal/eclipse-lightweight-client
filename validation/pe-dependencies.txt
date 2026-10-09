@@ -1,0 +1,47 @@
+﻿Microsoft (R) COFF/PE Dumper Version 14.38.33135.0
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+
+Dump of file C:\Users\Jason\Documents\Codex\2026-10-08\can-x20\work\smoke-candidate\Eclipse.exe
+
+File Type: EXECUTABLE IMAGE
+
+  Image has the following dependencies:
+
+    WINMM.dll
+    SHELL32.dll
+    bcryptprimitives.dll
+    kernel32.dll
+    gdi32.dll
+    advapi32.dll
+    ole32.dll
+    oleaut32.dll
+    api-ms-win-core-synch-l1-2-0.dll
+    mmdevapi.dll
+    mfplat.dll
+    api-ms-win-core-winrt-l1-1-0.dll
+    mf.dll
+    mfreadwrite.dll
+    user32.dll
+    d3d11.dll
+    ntdll.dll
+    propsys.dll
+    api-ms-win-core-winrt-error-l1-1-0.dll
+    coremessaging.dll
+    dwmapi.dll
+    shlwapi.dll
+    ws2_32.dll
+    opengl32.dll
+    imm32.dll
+    bcrypt.dll
+    uxtheme.dll
+
+  Summary
+
+        8000 .data
+       33000 .pdata
+      763000 .rdata
+        B000 .reloc
+       10000 .rsrc
+      7C4000 .text
+        1000 _RDATA

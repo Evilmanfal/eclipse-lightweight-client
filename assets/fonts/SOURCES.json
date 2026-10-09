@@ -1,0 +1,69 @@
+[
+  {
+    "name": "Bangers",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/bangers/Bangers-Regular.ttf",
+    "sha256": "4160a7311de9342674cce9160cde9fcbb30f48190397d86ff1b70b455af65824"
+  },
+  {
+    "name": "BioRhyme",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/biorhyme/BioRhyme%5Bwdth%2Cwght%5D.ttf",
+    "sha256": "3ef9bcf73838d59683b4144ddd4687bc9023340ee8e2bec33bc7b3cead65c9f7"
+  },
+  {
+    "name": "CherryBombOne",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/cherrybombone/CherryBombOne-Regular.ttf",
+    "sha256": "9596c6793eb0335057d655b13751ce7ccb50ef0cd15cb52c58465fb62de2bb8f"
+  },
+  {
+    "name": "Chicle",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/chicle/Chicle-Regular.ttf",
+    "sha256": "2c82494b86d3f03821284d60f2209a33218adde0dad7133ce3eb063b4363372b"
+  },
+  {
+    "name": "MuseoModerno",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/museomoderno/MuseoModerno%5Bwght%5D.ttf",
+    "sha256": "d03b027cf5cf72d014c8a405a8ceb83ea1d5d8ae2c64a7f602b131d9973e3503"
+  },
+  {
+    "name": "PixelifySans",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/pixelifysans/PixelifySans%5Bwght%5D.ttf",
+    "sha256": "9ba86cd010a4de309d263ceff8e8044092c9db7efda869620cb9ff1c4389e8a5"
+  },
+  {
+    "name": "ZillaSlab",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/zillaslab/ZillaSlab-SemiBold.ttf",
+    "sha256": "aafcb295b88d520357db1ecf9a1c3167055e87e9ddf5f63e560cbd139ec2805e"
+  },
+  {
+    "name": "PlaypenSans",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/playpensans/PlaypenSans%5Bwght%5D.ttf",
+    "sha256": "e083f9da8be210e08ea982ab510894641aab37590e70620d6db73f8de881ec4a"
+  },
+  {
+    "name": "Orbitron",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/orbitron/Orbitron%5Bwght%5D.ttf",
+    "sha256": "f42db2dd16e642258e35782916eceb1dcdbea06fb958d77ad71dc5963587e8fd"
+  },
+  {
+    "name": "NewRocker",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/newrocker/NewRocker-Regular.ttf",
+    "sha256": "28a499ce5b8bcf0652f8b2e25135183eaddf0c3c8c3e251259b075c71d1ef14c"
+  },
+  {
+    "name": "Kalam",
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/kalam/Kalam-Bold.ttf",
+    "sha256": "2f6576601db015d4f6c08678120277fc8510b98c06e932ce7a6a9cbff4cbdded"
+  },
+  {
+    "name": "Ribes",
+    "id": 9,
+    "source": "https://raw.githubusercontent.com/collletttivo/ribes/main/fonts/Ribes-Regular.otf",
+    "sha256": "b9b5955cf70241c3f0eb4f8ef90347b17e731c81712725c2d7b0d23314f5dac7"
+  },
+  {
+    "name": "Sinistre",
+    "id": 10,
+    "source": "https://raw.githubusercontent.com/collletttivo/sinistre/main/fonts/Sinistre-Regular.ttf",
+    "sha256": "3abb91cf0d09fb3c7198597cd27d435b81f2213621ee39571f421a89be8c4d16"
+  }
+]

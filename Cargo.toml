@@ -1,0 +1,40 @@
+[package]
+name = "eclipse-native"
+version = "0.8.0"
+edition = "2021"
+rust-version = "1.98"
+description = "An independent native Rust desktop client for Discord text chat"
+license = "MIT"
+
+[dependencies]
+eframe = { version = "=0.32.3", default-features = false, features = ["default_fonts", "glow"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
+tungstenite = { version = "0.27", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
+crossbeam-channel = "0.5"
+zeroize = "1"
+base64 = "0.22"
+prost = "0.13"
+image = { version = "0.25", default-features = false, features = ["png", "gif", "jpeg", "webp"] }
+rfd = { version = "0.15", default-features = false }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_System_Time", "Win32_System_SystemInformation", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_UI_Shell"] }
+windows = { version = "=0.61.3", features = ["Media_Control", "Foundation", "Foundation_Collections", "Storage_Streams", "Win32_System_WinRT"] }
+
+discord-voice = {path="vendor/serein/crates/discord-voice"}
+voice-model = {package="model",path="vendor/serein/crates/model"}
+voice-core = {package="client-core",path="vendor/serein/crates/client-core"}
+voice-platform = {package="platform",path="vendor/serein/crates/platform"}
+tokio = {version="1.50",features=["rt-multi-thread","sync","time"]}
+
+[patch.crates-io]
+libopus_sys={path="vendor/libopus_sys"}
+davey={path="vendor/serein/vendor/davey"}
+hpke-rs={path="vendor/serein/vendor/hpke-rs"}
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
