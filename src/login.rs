@@ -13,6 +13,11 @@ use std::{
 use zeroize::Zeroizing;
 
 const API: &str = "https://discord.com/api/v9";
+/// Sign-in requests describe themselves like Discord's web app in Chrome on Windows. Discord rejects
+/// otherwise-valid 2FA codes from requests that lack these client details.
+const BROWSER: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+/// Discord web build observed on October 9, 2026; refreshed from discord.com/login at sign-in.
+const FALLBACK_BUILD: u64 = 633029;
 
 /// What one sign-in step produced.
 pub enum Outcome {
@@ -51,7 +56,7 @@ fn client() -> Result<&'static Client, String> {
     if let Some(client) = CLIENT.get() { return Ok(client); }
     let client = Client::builder()
         .timeout(Duration::from_secs(20))
-        .user_agent("Eclipse Native")
+        .user_agent(BROWSER)
         .cookie_store(true)
         .build()
         .map_err(|_| "Could not start a secure connection to Discord.".to_owned())?;
@@ -69,9 +74,33 @@ fn fingerprint(client: &Client) -> Option<String> {
     cached.clone()
 }
 
+/// The current Discord web build number, read once from the login page.
+fn build_number(client: &Client) -> u64 {
+    static BUILD: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *BUILD.get_or_init(|| {
+        let page = client.get("https://discord.com/login").send().ok().and_then(|r| r.text().ok()).unwrap_or_default();
+        page.split("BUILD_NUMBER\":\"").nth(1).and_then(|rest| rest.split('"').next()).and_then(|n| n.parse().ok()).unwrap_or(FALLBACK_BUILD)
+    })
+}
+fn super_properties(build: u64) -> String {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let locale = "en-US";
+    STANDARD.encode(json!({
+        "os": "Windows", "browser": "Chrome", "device": "", "system_locale": locale, "has_client_mods": false,
+        "browser_user_agent": BROWSER, "browser_version": "141.0.0.0", "os_version": "10",
+        "referrer": "", "referring_domain": "", "referrer_current": "", "referring_domain_current": "",
+        "release_channel": "stable", "client_build_number": build, "client_event_source": null,
+    }).to_string())
+}
+
 fn post(route: &str, body: Value) -> Result<Value, (u16, Value)> {
     let client = client().map_err(|e| (0, json!({ "message": e })))?;
-    let mut request = client.post(format!("{API}{route}")).json(&body);
+    let mut request = client.post(format!("{API}{route}")).json(&body)
+        .header("Origin", "https://discord.com")
+        .header("Referer", "https://discord.com/login")
+        .header("X-Discord-Locale", "en-US")
+        .header("X-Debug-Options", "bugReporterEnabled")
+        .header("X-Super-Properties", super_properties(build_number(client)));
     if let Some(fingerprint) = fingerprint(client) { request = request.header("X-Fingerprint", fingerprint); }
     let response = request.send().map_err(|_| (0, json!({ "message": "Discord could not be reached. Check your connection." })))?;
     let status = response.status().as_u16();
@@ -192,6 +221,8 @@ fn remote_auth(tx: &Sender<Qr>, ctx: &egui::Context, stop: &AtomicBool) -> Resul
     };
     let mut request = "wss://remote-auth-gateway.discord.gg/?v=2".into_client_request().map_err(|_| "Invalid sign-in address.".to_owned())?;
     request.headers_mut().insert("Origin", "https://discord.com".parse().expect("static header"));
+    // Same browser identity as the sign-in requests, so the approval and token exchange look like one client.
+    request.headers_mut().insert("User-Agent", BROWSER.parse().expect("static header"));
     let (mut socket, _) = tungstenite::connect(request).map_err(|_| "Could not reach Discord's QR sign-in service.".to_owned())?;
     match socket.get_mut() {
         MaybeTlsStream::Plain(stream) => { let _ = stream.set_read_timeout(Some(Duration::from_millis(500))); }
@@ -307,5 +338,7 @@ mod tests {
         let body = mfa.body("123456");
         assert_eq!((body["code"].as_str(), body["ticket"].as_str(), body["login_instance_id"].as_str()), (Some("123456"), Some("t"), Some("i")));
         assert!(body["login_source"].is_null() && body.get("gift_code_sku_id").is_some());
+        let props: Value = { use base64::{engine::general_purpose::STANDARD, Engine}; serde_json::from_slice(&STANDARD.decode(super_properties(1234)).unwrap()).unwrap() };
+        assert_eq!((props["client_build_number"].as_u64(), props["browser"].as_str()), (Some(1234), Some("Chrome")));
     }
 }
