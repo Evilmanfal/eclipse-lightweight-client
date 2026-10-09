@@ -1,5 +1,6 @@
 # Unreleased
 
+- Faster stream decoding on Windows: video is decoded on the CPU instead of waiting on a per-picture GPU round trip, with a quicker color conversion and one less copy per picture, so 720p60 streams can keep up.
 - Fixed watched streams showing only about 2 pictures a second: a late frame tore down the video decoder, and rebuilding it made every following frame late too, so only keyframes were ever shown.
 - Smoother video on real connections: lost stream and camera packets are now requested again from Discord (NACK) and briefly waited for, instead of freezing the picture until the next keyframe. Constant keyframe requests were also what made streams look blocky.
 - Sharper, smoother screen shares: watched streams are shown at their own resolution (up to 1080p) instead of being shrunk to 640x360 on the CPU for every frame.
