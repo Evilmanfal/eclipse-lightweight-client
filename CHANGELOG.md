@@ -2,6 +2,7 @@
 
 - Links in messages and embeds are clickable and shown in link blue (right-click to copy).
 - Link previews are one Discord-style card: colored side bar, site name, linked title, description and fields, with the thumbnail inside the card instead of a large separate picture.
+- Click a picture in chat to view it full-size over the app; click outside it or press Esc to close, or open it in the browser.
 
 # Eclipse 0.8.2 — October 9, 2026
 

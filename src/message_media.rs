@@ -173,7 +173,43 @@ pub fn picture(
             );
         }
     }
+    if response.clicked(){open_viewer(ui.ctx(),url);}
+    let response=response.on_hover_cursor(egui::CursorIcon::PointingHand);
     response.context_menu(|ui|{if ui.button("Open image").clicked(){ui.ctx().open_url(egui::OpenUrl::new_tab(url));ui.close();}if ui.button("Copy image link").clicked(){ui.ctx().copy_text(url.to_owned());ui.close();}});
+}
+fn viewer_id()->egui::Id{egui::Id::new("eclipse-image-viewer")}
+/// Opens the full-window viewer for a chat picture.
+pub fn open_viewer(ctx:&egui::Context,url:&str){ctx.data_mut(|d|d.insert_temp(viewer_id(),url.to_owned()));}
+/// The full-window picture viewer: the image fitted to the window over a dark backdrop.
+/// Click outside the picture or press Esc to close it.
+pub fn viewer(ctx:&egui::Context,images:&mut Images){
+    let Some(url)=ctx.data(|d|d.get_temp::<String>(viewer_id())) else{return};
+    let mut close=ctx.input(|i|i.key_pressed(egui::Key::Escape));
+    let screen=ctx.screen_rect();
+    egui::Area::new(egui::Id::new("image-viewer-area")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx,|ui|{
+        let (rect,backdrop)=ui.allocate_exact_size(screen.size(),egui::Sense::click());
+        ui.painter().rect_filled(rect,0,egui::Color32::from_black_alpha(220));
+        let bounds=rect.shrink2(Vec2::new(40.0,60.0));
+        let request=Vec2::splat(bounds.size().max_elem());
+        let mut picture=egui::Rect::from_center_size(bounds.center(),Vec2::splat(0.0));
+        if let Some(texture)=images.texture_sized(&url,request,ctx){
+            let size=images.dimensions(&url,request,ctx).unwrap_or(bounds.size());
+            let scale=(bounds.width()/size.x.max(1.0)).min(bounds.height()/size.y.max(1.0));
+            picture=egui::Rect::from_center_size(bounds.center(),size*scale);
+            egui::Image::new((texture,picture.size())).corner_radius(8).paint_at(ui,picture);
+        }else{
+            let failed=images.failed(&url);
+            ui.painter().text(bounds.center(),egui::Align2::CENTER_CENTER,if failed{"Image unavailable"}else{"Loading image…"},egui::FontId::proportional(14.0),egui::Color32::GRAY);
+            if !failed{ctx.request_repaint();}
+        }
+        let footer=egui::Rect::from_center_size(egui::pos2(rect.center().x,rect.bottom()-30.0),Vec2::new(360.0,24.0));
+        ui.put(footer,|ui:&mut egui::Ui|ui.horizontal(|ui|{
+            ui.add(egui::Hyperlink::from_label_and_url(egui::RichText::new("Open in browser").color(LINK),&url));
+            ui.label(egui::RichText::new("·  Esc or click outside to close").color(egui::Color32::GRAY));
+        }).response);
+        if backdrop.clicked()&&!backdrop.interact_pointer_pos().is_some_and(|p|picture.contains(p)){close=true;}
+    });
+    if close{ctx.data_mut(|d|d.remove::<String>(viewer_id()));}
 }
 /// A Discord-style link preview in one card: colored side bar, site name, linked title, description
 /// and fields, with a small thumbnail beside the text or the large image inside the card.
@@ -248,6 +284,20 @@ mod tests {
         assert_eq!(link_in("<https://example.com/a>,"),Some("https://example.com/a"));
         assert_eq!(link_in("(https://example.com)."),Some("https://example.com"));
         assert_eq!(link_in("javascript:alert(1)"),None);assert_eq!(link_in("example.com"),None);
+    }
+    #[test]
+    fn clicking_a_picture_opens_the_viewer_and_escape_closes_it(){
+        let ctx=egui::Context::default();let mut images=Images::new(&ctx);let mut rect=egui::Rect::NOTHING;
+        let url="https://cdn.discordapp.com/attachments/1/2/cat.png";
+        let open=|ctx:&egui::Context|ctx.data(|d|d.get_temp::<String>(viewer_id()));
+        for phase in 0..4 {
+            let mut input=egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,Vec2::new(500.,500.))),..Default::default()};
+            match phase{1|2=>{let pos=rect.center();input.events.push(egui::Event::PointerMoved(pos));input.events.push(egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed:phase==1,modifiers:Default::default()});},
+                3=>input.events.push(egui::Event::Key{key:egui::Key::Escape,physical_key:None,pressed:true,repeat:false,modifiers:Default::default()}),_=>{}}
+            let _=ctx.run(input,|ctx|{egui::CentralPanel::default().show(ctx,|ui|{let before=ui.cursor().min;picture(ui,&mut images,url,Some(300),Some(200),true);rect=egui::Rect::from_min_max(before,ui.min_rect().max);});viewer(ctx,&mut images);});
+            if phase==2{assert_eq!(open(&ctx).as_deref(),Some(url),"click did not open the viewer");}
+        }
+        assert!(open(&ctx).is_none(),"Esc did not close the viewer");
     }
     #[test]
     fn unicode_and_custom_keep_surrounding_text() {
