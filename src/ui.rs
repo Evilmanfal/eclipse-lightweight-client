@@ -812,11 +812,11 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             .frame(egui::Frame::NONE.fill(preferences_bg(&self.prefs)))
             .show(ctx, |ui| {
                 let width = ui.available_width();
-                ui.add_space((ui.available_height() - 660.0).max(16.0) / 2.0);
+                ui.add_space((ui.available_height() - 720.0).max(12.0) / 2.0);
                 ui.horizontal(|ui| {
-                    ui.add_space(((width - 510.0) / 2.0).max(20.0));
+                    ui.add_space(((width - 760.0) / 2.0).max(20.0));
                     ui.vertical(|ui| {
-                        ui.set_width(490.0);
+                        ui.set_width((width - 40.0).min(740.0));
                         ui.horizontal(|ui| {
                             eclipse_mark(ui, 38.0);
                             ui.label(RichText::new("ECLIPSE").size(17.0).strong().color(self.accent()));
@@ -839,7 +839,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                             .corner_radius(12)
                             .inner_margin(22)
                             .show(ui, |ui| {
-                                ui.set_width(446.0);
+                                ui.set_width(ui.available_width());
                                 self.login_card(ui, ctx);
                             });
                         ui.add_space(13.0);

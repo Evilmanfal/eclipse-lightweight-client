@@ -2,12 +2,8 @@ use super::*;
 use crate::login::{self, Mfa, Outcome, Qr, QrSession};
 use zeroize::Zeroizing;
 
-#[derive(Clone, Copy, PartialEq)]
-pub(in crate::ui) enum LoginTab { Qr, Password }
-
 /// Sign-in screen state. Secrets are wiped as soon as they are sent.
 pub(in crate::ui) struct LoginUi {
-    tab: LoginTab,
     login: String,
     password: String,
     code: String,
@@ -18,12 +14,13 @@ pub(in crate::ui) struct LoginUi {
     qr: Option<QrSession>,
     qr_url: Option<String>,
     qr_scanned: Option<String>,
+    qr_error: Option<String>,
     pub(in crate::ui) remember: bool,
     error: Option<String>,
 }
 impl Default for LoginUi {
     fn default() -> Self {
-        Self { tab: LoginTab::Qr, login: String::new(), password: String::new(), code: String::new(), mfa: None, sms_phone: None, pending: None, qr: None, qr_url: None, qr_scanned: None, remember: true, error: None }
+        Self { login: String::new(), password: String::new(), code: String::new(), mfa: None, sms_phone: None, pending: None, qr: None, qr_url: None, qr_scanned: None, qr_error: None, remember: true, error: None }
     }
 }
 impl Drop for LoginUi { fn drop(&mut self) { self.password.zeroize(); self.code.zeroize(); } }
@@ -33,6 +30,7 @@ impl Eclipse {
     pub(in crate::ui) fn begin_session(&mut self, token: Zeroizing<String>, ctx: &egui::Context) {
         self.backend = Some(backend::start(token.to_string(), ctx.clone()));
         self.pending_save = self.login_ui.remember.then_some(token);
+        self.login_ui.qr = None;
         self.connecting = true;
         self.error = None;
         self.status = "Connecting…".into();
@@ -54,24 +52,35 @@ impl Eclipse {
             ui.horizontal(|ui| { ui.spinner(); ui.label(RichText::new(if self.auto_login { "Signing you back in…" } else { "Connecting to Discord…" }).color(MUTED)); });
             return;
         }
-        ui.horizontal(|ui| {
-            for (tab, label) in [(LoginTab::Qr, "QR Code"), (LoginTab::Password, "Email or Phone")] {
-                if ui.selectable_label(self.login_ui.tab == tab, label).clicked() && self.login_ui.tab != tab {
-                    self.login_ui.tab = tab; self.login_ui.error = None;
-                }
+        // Email/phone sign-in on the left and the QR code on the right, like Discord; stacked when narrow.
+        let wide = ui.available_width() >= 600.0;
+        let qr_width = 200.0;
+        let form_width = if wide { ui.available_width() - qr_width - 41.0 } else { ui.available_width() };
+        let form = |this: &mut Self, ui: &mut egui::Ui| {
+            ui.set_width(form_width);
+            if this.login_ui.mfa.is_some() { this.mfa_step(ui, ctx) } else { this.password_tab(ui, ctx) }
+            ui.add_space(10.0);
+            ui.checkbox(&mut this.login_ui.remember, "Stay signed in").on_hover_text("Saved securely in Windows Credential Manager. Log out to remove it.");
+            if let Some(error) = this.login_ui.error.clone().or_else(|| this.error.clone()) {
+                ui.add_space(6.0);
+                ui.colored_label(Color32::from_rgb(255, 160, 151), error);
             }
-        });
-        ui.add_space(12.0);
-        match self.login_ui.tab {
-            LoginTab::Qr => self.qr_tab(ui, ctx),
-            LoginTab::Password => if self.login_ui.mfa.is_some() { self.mfa_step(ui, ctx) } else { self.password_tab(ui, ctx) },
-        }
-        if self.login_ui.tab != LoginTab::Qr { self.login_ui.qr = None; self.login_ui.qr_url = None; self.login_ui.qr_scanned = None; }
-        ui.add_space(10.0);
-        ui.checkbox(&mut self.login_ui.remember, "Stay signed in").on_hover_text("Saved securely in Windows Credential Manager. Log out to remove it.");
-        if let Some(error) = self.login_ui.error.clone().or_else(|| self.error.clone()) {
-            ui.add_space(6.0);
-            ui.colored_label(Color32::from_rgb(255, 160, 151), error);
+        };
+        if wide {
+            ui.horizontal_top(|ui| {
+                ui.vertical(|ui| form(self, ui));
+                ui.add_space(20.0);
+                let top = ui.cursor().top();
+                ui.painter().vline(ui.cursor().left(), top..=top + 260.0, Stroke::new(1.0_f32, BORDER));
+                ui.add_space(20.0);
+                ui.vertical(|ui| { ui.set_width(qr_width); self.qr_panel(ui, ctx); });
+            });
+        } else {
+            ui.vertical(|ui| form(self, ui));
+            ui.add_space(14.0);
+            ui.separator();
+            ui.add_space(10.0);
+            ui.vertical_centered(|ui| { ui.set_width(qr_width); self.qr_panel(ui, ctx); });
         }
         ui.add_space(6.0);
         ui.label(RichText::new("Unofficial clients are not supported by Discord.").size(11.0).color(MUTED));
@@ -93,32 +102,33 @@ impl Eclipse {
                 Qr::Scanned(name) => self.login_ui.qr_scanned = Some(name),
                 Qr::Restarting => { self.login_ui.qr_url = None; self.login_ui.qr_scanned = None; }
                 Qr::Token(token) => { self.login_ui.qr = None; self.begin_session(token, ctx); return; }
-                Qr::Error(error) => { self.login_ui.qr = None; self.login_ui.error = Some(error); }
+                Qr::Error(error) => { self.login_ui.qr = None; self.login_ui.qr_error = Some(error); }
             }
         }
     }
-    fn qr_tab(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        if self.login_ui.qr.is_none() && self.login_ui.error.is_none() { self.login_ui.qr = Some(login::qr(ctx)); }
-        ui.horizontal(|ui| {
+    fn qr_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        if self.login_ui.qr.is_none() && self.login_ui.qr_error.is_none() { self.login_ui.qr = Some(login::qr(ctx)); }
+        ui.vertical_centered(|ui| {
             let (rect, _) = ui.allocate_exact_size(Vec2::splat(176.0), egui::Sense::hover());
             ui.painter().rect_filled(rect, 10, Color32::WHITE);
             match &self.login_ui.qr_url {
                 Some(url) if self.login_ui.qr_scanned.is_none() => paint_qr(ui, rect.shrink(10.0), url),
                 Some(_) => { ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "✔", egui::FontId::proportional(48.0), Color32::from_rgb(35, 165, 90)); }
+                None if self.login_ui.qr_error.is_some() => { ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "QR code unavailable", egui::FontId::proportional(12.0), Color32::DARK_GRAY); }
                 None => { ui.put(egui::Rect::from_center_size(rect.center(), Vec2::splat(24.0)), egui::Spinner::new().color(Color32::DARK_GRAY)); }
             }
-            ui.add_space(14.0);
-            ui.vertical(|ui| {
-                ui.set_width(230.0);
-                if let Some(name) = &self.login_ui.qr_scanned {
-                    ui.label(RichText::new("Check your phone!").size(17.0).strong());
-                    ui.label(RichText::new(format!("Approve the sign-in for {name} in the Discord app.")).color(MUTED));
-                } else {
-                    ui.label(RichText::new("Log in with QR Code").size(17.0).strong());
-                    ui.label(RichText::new("Scan this with the Discord mobile app to log in instantly. No password or 2FA code needed.").color(MUTED));
-                }
-                if self.login_ui.error.is_some() && ui.button("Try again").clicked() { self.login_ui.error = None; }
-            });
+            ui.add_space(12.0);
+            if let Some(name) = &self.login_ui.qr_scanned {
+                ui.label(RichText::new("Check your phone!").size(17.0).strong());
+                ui.label(RichText::new(format!("Approve the sign-in for {name} in the Discord app.")).color(MUTED));
+            } else {
+                ui.label(RichText::new("Log in with QR Code").size(17.0).strong());
+                ui.label(RichText::new("Scan this with the Discord mobile app to log in instantly.").color(MUTED));
+            }
+            if let Some(error) = self.login_ui.qr_error.clone() {
+                ui.colored_label(Color32::from_rgb(255, 160, 151), error);
+                if ui.button("Try again").clicked() { self.login_ui.qr_error = None; }
+            }
         });
     }
     fn password_tab(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {

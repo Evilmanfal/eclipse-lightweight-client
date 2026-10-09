@@ -5,16 +5,16 @@
 - The Direct messages header is now a centered conversation search; the Eclipse icon and the separate search box under Quests are gone, moving the DM list up.
 - The conversation search at the top reads Find A Conversation, clears while you type and returns when left empty.
 - Shop cards stay still until hovered, and the image cache never evicts on-screen images (keeping a new animation still instead), fixing decorations, nameplates and Shop/Quests art reloading constantly.
-- New sign-in: QR code via the Discord mobile app, or email/phone and password with authenticator, backup-code and SMS 2FA. Token entry is removed.
+- New sign-in on one screen: email/phone and password (with authenticator, backup-code and SMS 2FA) on the left and a QR code for the Discord mobile app on the right. Token entry is removed.
 - Stay signed in: the session is saved in Windows Credential Manager and resumed at launch; Log out forgets it.
 - Clicking your avatar or name in the bottom-left bar opens a Discord-style account menu: profile banner and bio, Edit Profile, status (Online, Idle, Do Not Disturb, Invisible), Switch Accounts (log out) and Copy User ID.
 
-# Eclipse 0.8.1 — October 9, 2026
+# Eclipse 0.8.1 â€” October 9, 2026
 
 - Bottom-left account bar spans the server rail and channel list: nameplate background (theme colour without one), avatar, styled name and status, borderless activity/mute/deafen/settings controls with input and output device menus. Removed the Live and Push to Talk labels.
 - Conversation header: one "Search <server>" box filters messages and members; pins and member list are small icons; refresh button removed. The member list no longer has its own search or online count.
 - Pinned messages open as an anchored dropdown. Drag its bottom edge to resize (saved); click a pin to jump to it, loading surrounding history for older pins with Jump to present to return.
-- Right-click → Profile (or a popout avatar) opens a full profile with bio, member-since dates, roles, connections and mutual servers/friends. Profiles use theme colours as gradients with the banner fading in. Clicking the same person again closes their popout.
+- Right-click â†’ Profile (or a popout avatar) opens a full profile with bio, member-since dates, roles, connections and mutual servers/friends. Profiles use theme colours as gradients with the banner fading in. Clicking the same person again closes their popout.
 - Chat drops the YOU tag and presence dots on avatars.
 - Friends is a compact list with round message/profile icons and an Active Now column of friends' current activities.
 - Ctrl+V in the message bar attaches copied files and images (screenshots, browser images).
@@ -23,12 +23,12 @@
 - Tighter spacing in the Direct messages navigation.
 - GitHub Actions builds and tests every push on Windows; version tags publish Eclipse.exe as a release.
 
-# Eclipse 0.8 — October 8, 2026
+# Eclipse 0.8 â€” October 8, 2026
 
 - Animated avatars, server icons, emoji, banners, profile effects, shop artwork and name effects play only while hovered and return to their first frame afterward. GIFs in chat and in the GIF picker still play automatically.
 - All animations, GIFs included, pause on their current frame while the Eclipse window is not focused and continue when it regains focus.
-- Emoji and GIF pickers attach above their composer buttons, follow resizing/zooming and dismiss on outside click, Escape, × or toggling the button.
-- Ctrl+wheel zoom with a saved 75–150% scale; Ctrl+0 resets. Side panels adapt at higher zoom.
+- Emoji and GIF pickers attach above their composer buttons, follow resizing/zooming and dismiss on outside click, Escape, Ã— or toggling the button.
+- Ctrl+wheel zoom with a saved 75â€“150% scale; Ctrl+0 resets. Side panels adapt at higher zoom.
 - Less padding around the chat, composer and settings; tighter message spacing.
 - Tighter 30-point server text/voice channel rows and compact server member rows.
 - Removed server channel search and its empty header space; channel lists move up and use the freed height. DM conversation search stays.
@@ -41,11 +41,11 @@
 - Compact mode (Appearance or Chat): 85% interface scale, with panels joined into one connected surface and thin dividers instead of gaps and rounded cards. Buttons stay rounded, message avatars stay visible and message spacing is tighter. Replaces the earlier avatar-free compact messages.
 - Updates the same Eclipse.exe and ZIP and preserves local preferences.
 
-# Eclipse 0.7 — October 8, 2026
+# Eclipse 0.7 â€” October 8, 2026
 
 - Enter sends and Shift+Enter inserts a line break; preserves focus, draft safety and IME composition.
 - Removed grey message bubbles in server chats, group chats and DMs.
-- Matching user/server settings panels, outside-click/Escape/× dismissal, grouped sidebars, content cards and readable settings labels. Technical IDs stay in optional developer details.
+- Matching user/server settings panels, outside-click/Escape/Ã— dismissal, grouped sidebars, content cards and readable settings labels. Technical IDs stay in optional developer details.
 - Performance presets, language choices, friendly processing names and AFK durations.
 - Server icon/name opens its anchored menu; wheel scrolling without a visible server scrollbar.
 - Push-to-talk supports Ctrl, Shift and Alt alone, modifier-only chords and key/mouse combinations, saving the fullest chord on release.
@@ -54,7 +54,7 @@
 - Product artwork resolves decoration hashes, profile-effect IDs and nameplates; quest images resolve matching IDs and CDN paths.
 - Updates the same Eclipse.exe and ZIP; existing preferences and installed Discord are untouched.
 
-# Eclipse 0.6 — October 8, 2026
+# Eclipse 0.6 â€” October 8, 2026
 
 - Renamed the client and project from Feather to Eclipse, with an original black/orange/red eclipse icon embedded in the Windows EXE and used for the window/taskbar. Existing preferences carry over.
 
@@ -70,7 +70,7 @@
 - Four distinct original mute/unmute/deafen/undeafen feedback sounds, with a settings toggle.
 - Updates the existing portable folder and ZIP; installed Discord remains untouched.
 
-# Eclipse 0.5 — October 8, 2026
+# Eclipse 0.5 â€” October 8, 2026
 
 - Anchored server/user profile popouts with outside-click and Escape dismissal, replacing movable profile windows.
 - Discord-supplied badges, server/global banners, profile colors, avatar decorations, server tags, nameplates and thirteen licensed display-name fonts; bounded animated artwork and supported profile-effect previews.
