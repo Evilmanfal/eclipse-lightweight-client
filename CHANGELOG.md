@@ -2,6 +2,7 @@
 
 - The selected server's icon, nameplates, avatar decorations and display-name effects keep animating; other avatars, icons and artwork still animate on hover.
 - Fixed Shop and Quests constantly reloading server icons and avatars: off-screen cards no longer request artwork, and the image cache evicts icons and avatars last.
+- The Direct messages title is now a centered search bar for finding conversations; the Eclipse icon and the separate Find a conversation box are gone, moving the DM list up.
 - Clicking your avatar or name in the bottom-left bar opens a Discord-style account menu: profile banner and bio, Edit Profile, status (Online, Idle, Do Not Disturb, Invisible), Switch Accounts (log out) and Copy User ID.
 
 # Eclipse 0.8.1 — October 9, 2026

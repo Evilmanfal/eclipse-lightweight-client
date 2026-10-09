@@ -1306,17 +1306,20 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                             if ui.button("Members & Roles").clicked(){self.open_server_settings();self.server_page="Members".into();self.load_server_page();ui.close();}
                             if ui.button("Notification Settings").clicked(){self.open_server_settings();self.server_page="Notifications".into();self.load_server_page();ui.close();}
                         });
-                    }else{ui.horizontal(|ui|{eclipse_mark(ui,23.);ui.label(RichText::new(name).size(18.).strong());});}
+                    }else{
+                        // The Direct Messages title doubles as the conversation search, like Discord's top bar.
+                        ui.scope(|ui|{ui.visuals_mut().extreme_bg_color=CARD;
+                            ui.add(egui::TextEdit::singleline(&mut self.channel_filter).hint_text(RichText::new(name).size(15.)).horizontal_align(egui::Align::Center).desired_width(f32::INFINITY).margin(Vec2::new(9.0,7.0))).on_hover_text("Find a conversation");
+                        });
+                    }
                     ui.add_space(if self.guild.is_some(){8.0}else{4.0});
                     ui.separator();
                     ui.add_space(if self.guild.is_some(){4.0}else{0.0});
                     if self.guild.is_none(){
                         ui.scope(|ui|{ui.spacing_mut().item_spacing.y=1.0;
                             for(home,label)in[(Home::Friends,"Friends"),(Home::Nitro,"Nitro"),(Home::Shop,"Shop"),(Home::Quests,"Quests")]{if crate::widgets::home_row(ui,label,self.home==home,if self.home==home{TEXT}else{MUTED}).clicked(){self.navigate_home(home);}}
-                            ui.add_space(1.0);ui.separator();ui.add_space(1.0);
-                            ui.add(egui::TextEdit::singleline(&mut self.channel_filter).hint_text("Find a conversation").desired_width(f32::INFINITY).margin(Vec2::new(9.0,6.0)));
                         });
-                        ui.add_space(-3.0);
+                        ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.label(RichText::new("Direct messages").size(12.0).color(MUTED).strong());
                             let plus=ui.small_button("+").on_hover_text("Find a friend or server member");
@@ -1325,7 +1328,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     }
                     egui::ScrollArea::vertical()
                         .id_salt("channels")
-                        .max_height((channel_height-if self.guild.is_some(){85.0}else{255.0}).max(70.0))
+                        .max_height((channel_height-if self.guild.is_some(){85.0}else{229.0}).max(70.0))
                         .show(ui, |ui| {
                             if self.guild.is_some(){ui.spacing_mut().item_spacing.y=3.0;}
                             for channel in self.channels.clone() {
@@ -2311,7 +2314,9 @@ mod interaction_tests {
         let category=labels.iter().find(|t|t.galley.job.text=="Community").expect("first channel category");let header=ctx.read_response(egui::Id::new("server-header-click")).unwrap().rect;
         assert!(category.visual_bounding_rect().top()-header.bottom()<60.0,"channel list must move up");
         app.guild=None;app.channels=app.dms.clone();
-        let output=ctx.run(input(vec![]),|ctx|{app.left_column(ctx);});assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t)if t.galley.job.text=="Find a conversation")));
+        let output=ctx.run(input(vec![]),|ctx|{app.left_column(ctx);});let texts:Vec<_>=output.shapes.iter().filter_map(|s|if let egui::Shape::Text(t)=&s.shape{Some(t.galley.job.text.clone())}else{None}).collect();
+        // The centered search bar title plus the list heading; the old separate search box is gone.
+        assert_eq!(texts.iter().filter(|t|t.as_str()=="Direct messages").count(),2,"{texts:?}");assert!(!texts.iter().any(|t|t=="Find a conversation"));
     }
     #[test]fn member_panel_has_no_count_or_search_and_header_search_names_the_server(){
         let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);app.show_members=true;app.prefs.member_count=true;
