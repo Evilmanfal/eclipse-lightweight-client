@@ -2346,8 +2346,10 @@ mod interaction_tests {
         let output=output.unwrap();let texts:Vec<_>=output.shapes.iter().filter_map(|s|if let egui::Shape::Text(t)=&s.shape{Some(t)}else{None}).collect();
         assert_eq!(texts.iter().filter(|t|t.galley.job.text=="Repeated author").count(),2);
         assert_eq!(texts.iter().filter(|t|t.galley.job.text=="Other author").count(),1);
-        let body=|text:&str|texts.iter().find(|t|t.galley.job.text==text).expect("message body").visual_bounding_rect();
-        assert!((body("First in group").left()-body("Second in group").left()).abs()<1.0);
+        // Glyph bearings differ (e.g. F versus S); compare layout origins, not ink bounds.
+        let body=|text:&str|texts.iter().find(|t|t.galley.job.text==text).expect("message body").pos;
+        let first=body("First in group");let second=body("Second in group");
+        assert!((first.x-second.x).abs()<1.0,"message origins differ: {first:?}, {second:?}");
         body("Other message");body("New group");
         assert!(!texts.iter().any(|t|t.galley.job.text.contains("Enter to send")));
     }

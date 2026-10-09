@@ -55,19 +55,23 @@ mod tests {
             let mut point = egui::Pos2::ZERO;
             let mut offset = 0.0;
             let mut scale = 1.0;
-            let _ = ctx.run(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ctx| {
+            // Settle layout before positioning the pointer. A shrinking area can otherwise
+            // leave the pointer outside its final hit region on the wheel frame.
+            for _ in 0..3 { let _ = ctx.run(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let area = egui::ScrollArea::vertical().max_height(100.0).vertical_scroll_offset(500.0)
+                    let area = egui::ScrollArea::vertical().id_salt("scroll-speed-test")
+                        .auto_shrink([false,false]).max_height(100.0).vertical_scroll_offset(500.0)
                         .show(ui, |ui| ui.set_min_size(egui::vec2(200.0, 2000.0)));
                     point = area.inner_rect.center();
                 });
-            });
+            }); }
             let wheel = Event::MouseWheel { unit, delta: egui::vec2(0.0, 1.0), modifiers: egui::Modifiers { ctrl, ..Default::default() } };
             let _ = ctx.run(egui::RawInput { screen_rect: Some(screen), events: vec![Event::PointerMoved(point), wheel], ..Default::default() }, |ctx| {
                 handle(ctx, &mut scale);
                 if faster { accelerate_scroll(ctx); }
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    offset = egui::ScrollArea::vertical().max_height(100.0)
+                    offset = egui::ScrollArea::vertical().id_salt("scroll-speed-test")
+                        .auto_shrink([false,false]).max_height(100.0)
                         .show(ui, |ui| ui.set_min_size(egui::vec2(200.0, 2000.0))).state.offset.y;
                 });
             });
@@ -76,8 +80,8 @@ mod tests {
         for unit in [MouseWheelUnit::Point, MouseWheelUnit::Line, MouseWheelUnit::Page] {
             let (normal, _) = scroll(unit, false, false);
             let (faster, scale) = scroll(unit, false, true);
-            assert!(normal > 0.0);
-            assert!((faster - normal * 2.0).abs() < 0.01);
+            assert!(normal > 0.0,"{unit:?}: wheel did not scroll the viewport");
+            assert!((faster - normal * 2.0).abs() < 0.01,"{unit:?}: normal={normal}, faster={faster}");
             assert_eq!(scale, 1.0);
             let (movement, scale) = scroll(unit, true, true);
             assert_eq!(movement, 0.0);
