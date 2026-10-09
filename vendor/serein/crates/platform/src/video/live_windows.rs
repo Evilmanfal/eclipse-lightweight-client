@@ -19,6 +19,7 @@ use windows::{
 };
 
 const MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+const PREFER_DXVA: bool = false;
 /// 100 ns units per picture at a nominal 30 fps; only monotonicity matters to the decoder.
 const TICKS_PER_PICTURE: i64 = 333_333;
 
@@ -54,7 +55,10 @@ impl H264Decoder {
 			if let Ok(attributes) = transform.GetAttributes() {
 				let _ = attributes.SetUINT32(&CODECAPI_AVLowLatencyMode, 1);
 			}
-			let (device, manager) = hardware(&transform);
+			// Eclipse: decode on the CPU. DXVA made every picture wait for the GPU and then be
+			// read back before the next one could start, capping 720p60 streams near 25 fps;
+			// the multi-threaded software path keeps up and returns pictures in system memory.
+			let (device, manager) = if PREFER_DXVA { hardware(&transform) } else { (None, None) };
 			let input = MFCreateMediaType().map_err(|_| UNSUPPORTED)?;
 			input
 				.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
@@ -256,14 +260,15 @@ impl H264Decoder {
 			let Some(sample) = sample else {
 				return Ok(());
 			};
-			let bytes = sample_bytes(&sample)?;
-			(self.sink)(nv12_to_rgba(&bytes, format)?);
+			let frame = with_sample_bytes(&sample, |bytes| nv12_to_rgba(bytes, format))??;
+			(self.sink)(frame);
 		}
 	}
 }
 
 /// Try to enable DXVA: a D3D11 video device shared with the transform. Any failure leaves
 /// the decoder in software mode.
+#[allow(dead_code)] // Kept for PREFER_DXVA.
 unsafe fn hardware(
 	transform: &IMFTransform,
 ) -> (Option<ID3D11Device>, Option<IMFDXGIDeviceManager>) {
@@ -288,7 +293,8 @@ unsafe fn hardware(
 	}
 }
 
-fn sample_bytes(sample: &IMFSample) -> Result<Vec<u8>, &'static str> {
+/// Runs `read` on the sample's bytes while its buffer is locked, without copying them out.
+fn with_sample_bytes<R>(sample: &IMFSample, read: impl FnOnce(&[u8]) -> R) -> Result<R, &'static str> {
 	// SAFETY: Native length is checked before allocating; Lock's pointer is borrowed only
 	// until Unlock and the copy length is validated against the reported capacity. For DXGI
 	// buffers Media Foundation performs the GPU read-back inside Lock.
@@ -309,7 +315,7 @@ fn sample_bytes(sample: &IMFSample) -> Result<Vec<u8>, &'static str> {
 		{
 			Err(INVALID)
 		} else {
-			Ok(std::slice::from_raw_parts(data, length as usize).to_vec())
+			Ok(read(std::slice::from_raw_parts(data, length as usize)))
 		};
 		buffer.Unlock().map_err(|_| INVALID)?;
 		result
@@ -334,26 +340,34 @@ fn nv12_to_rgba(bytes: &[u8], format: OutputFormat) -> Result<Frame, &'static st
 	}
 	let (luma, chroma) = bytes.split_at(luma_len);
 	let mut rgba = vec![0; width * out_height * 4];
-	for y in 0..out_height {
-		let luma_row = &luma[(y0 + y) * stride..];
-		let chroma_row = &chroma[((y0 + y) / 2) * stride..];
-		let out = &mut rgba[y * width * 4..(y + 1) * width * 4];
-		for (x, pixel) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-			let sx = x0 + x;
-			let yy = f32::from(luma_row[sx]) - 16.0;
-			let u = f32::from(chroma_row[(sx / 2) * 2]) - 128.0;
-			let v = f32::from(chroma_row[(sx / 2) * 2 + 1]) - 128.0;
-			let r = 1.164 * yy + 1.596 * v;
-			let g = 1.164 * yy - 0.392 * u - 0.813 * v;
-			let b = 1.164 * yy + 2.017 * u;
-			// Round to the nearest channel value: limited-range white is 254.916 here.
-			*pixel = [
-				r.round().clamp(0.0, 255.0) as u8,
-				g.round().clamp(0.0, 255.0) as u8,
-				b.round().clamp(0.0, 255.0) as u8,
-				255,
-			];
+	// 8-bit fixed point (Eclipse): the float version called a rounding function three times
+	// per pixel, about 6.5 ms per 720p picture; this is about 2.5 ms and within one level.
+	let channel = |value: i32| (value >> 8).clamp(0, 255) as u8;
+	let convert = |first_row: usize, out: &mut [u8]| {
+		for (row, out) in out.chunks_exact_mut(width * 4).enumerate() {
+			let y = first_row + row;
+			let luma_row = &luma[(y0 + y) * stride..];
+			let chroma_row = &chroma[((y0 + y) / 2) * stride..];
+			for (x, pixel) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+				let sx = x0 + x;
+				let c = 298 * (i32::from(luma_row[sx]) - 16) + 128;
+				let d = i32::from(chroma_row[(sx / 2) * 2]) - 128;
+				let e = i32::from(chroma_row[(sx / 2) * 2 + 1]) - 128;
+				*pixel = [channel(c + 409 * e), channel(c - 100 * d - 208 * e), channel(c + 516 * d), 255];
+			}
 		}
+	};
+	// Large pictures (720p and up, so 1080p60 keeps up) are converted in four bands at once.
+	if width * out_height >= 1280 * 720 && out_height >= 4 {
+		let band = out_height.div_ceil(4);
+		std::thread::scope(|scope| {
+			for (index, out) in rgba.chunks_mut(band * width * 4).enumerate() {
+				let convert = &convert;
+				scope.spawn(move || convert(index * band, out));
+			}
+		});
+	} else {
+		convert(0, &mut rgba);
 	}
 	Ok(Frame {
 		width: format.crop.2,

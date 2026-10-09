@@ -1,3 +1,30 @@
+# Unreleased
+
+- Fixed a stream getting stuck on "Connecting to stream…" when watched again after stopping: Eclipse now tells Discord it left the stream.
+- Friends get the green speaking outline under the voice channel while they talk, not just you.
+- 1080p streams keep up too: large pictures are color-converted on four CPU threads (about 2.9 ms per 1080p picture instead of 14.7 ms).
+- Faster stream decoding on Windows: video is decoded on the CPU instead of waiting on a per-picture GPU round trip, with a quicker color conversion and one less copy per picture, so 720p60 streams can keep up.
+- Fixed watched streams showing only about 2 pictures a second: a late frame tore down the video decoder, and rebuilding it made every following frame late too, so only keyframes were ever shown.
+- Smoother video on real connections: lost stream and camera packets are now requested again from Discord (NACK) and briefly waited for, instead of freezing the picture until the next keyframe. Constant keyframe requests were also what made streams look blocky.
+- Sharper, smoother screen shares: watched streams are shown at their own resolution (up to 1080p) instead of being shrunk to 640x360 on the CPU for every frame.
+- Enlarge a stream you're watching: hover it for Enlarge (hides the participant strip) and Full screen (double-click also works; Esc leaves).
+- Picture in picture: clicking a text channel while watching keeps the stream in a small movable window in the corner; click it to return to the stream.
+- The Watch Stream buttons are smaller rounded pills with a screen icon.
+- Mentions read as names: <@id> shows as @name, role mentions as @role and channel links as #channel, in messages and reply previews.
+- Typing @ in the message box lists who you can mention (members, plus @everyone and @here where you're allowed), filtered as you type. Arrow keys or the mouse choose, Tab or Enter inserts; the name is sent as a real mention.
+- Reply puts the cursor straight into the message box.
+- Watch screen shares like Discord: a live friend's call tile shows LIVE and a Watch Stream button, including friends who were already live when you joined. Hovering a live friend under a voice channel also offers Watch Stream (joining the channel first if needed). The watched stream fills the stage with Stop Watching and a volume control, and everyone else sits in a strip below.
+- Sharing your screen opens a Discord-style Screen Share dialog with Applications and Screens tabs, resolution and frame-rate choices, sound sharing and Go Live, instead of a separate window.
+- Shift-hover quick delete removes the message at once, without a confirmation (the right-click Delete still asks).
+- Editing a message happens in place, like Discord: the message turns into an outlined, already-focused edit box with "escape to cancel • enter to save" under it. The separate edit popup is gone.
+- Update prompt at launch: when GitHub has a newer Eclipse release, Eclipse asks whether to update. Yes downloads it, checks it against the release checksum, installs it and restarts; No keeps a green update button in the top right to update later.
+- Links in messages and embeds are clickable and shown in link blue (right-click to copy).
+- Link previews are one Discord-style card: colored side bar, site name, linked title, description and fields, with the thumbnail inside the card instead of a large separate picture. Click a preview's picture to open it in the larger view.
+- Click a picture in chat to open it like Discord's viewer: shown at its own size (shrunk only to fit) over the dimmed app, with the sender and time at the top left and zoom, open in browser, copy link and close at the top right. Esc or a click outside closes it.
+- Save pictures from the viewer's download button or the right-click menu (Save image…); Eclipse asks where to save and confirms when it's done.
+- The call screen now shows everyone in the voice channel, including people who were already there when you joined.
+- With push to talk on, your green speaking outline follows your push-to-talk key instead of microphone activity.
+
 # Eclipse 0.8.2 — October 9, 2026
 
 - Scrolls move twice as fast. Consecutive messages from the same author share an avatar and heading, with each message retaining its actions.

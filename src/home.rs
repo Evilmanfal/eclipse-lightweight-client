@@ -1,7 +1,7 @@
 use super::*;
 impl Eclipse {
     pub(in crate::ui) fn home_panel(&mut self,ctx:&egui::Context){
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(preferences::color(&self.prefs.theme.background).unwrap_or(BG)).inner_margin(20)).show(ctx,|ui|{
+        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(preferences::color(&self.prefs.theme.background).unwrap_or(BG)).inner_margin(egui::Margin{left:20,right:20,top:if self.updater_later(){56}else{20},bottom:20})).show(ctx,|ui|{
             // Friends lays out its own scrolling list beside the Active Now column.
             if self.home==Home::Friends{self.friends_content(ui);return;}
             egui::ScrollArea::vertical().id_salt("home-scroll").auto_shrink([false,false]).show(ui,|ui|{

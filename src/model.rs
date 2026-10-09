@@ -118,6 +118,22 @@ pub struct Embed {
     pub image: Option<EmbedImage>,
     pub thumbnail: Option<EmbedImage>,
     pub video: Option<EmbedImage>,
+    pub color: Option<u32>,
+    pub provider: Option<EmbedName>,
+    pub author: Option<EmbedName>,
+    #[serde(default)] pub fields: Vec<EmbedField>,
+}
+/// An embed's site (provider) or author line.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct EmbedName {
+    pub name: Option<String>,
+    pub url: Option<String>,
+}
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct EmbedField {
+    #[serde(default)] pub name: String,
+    #[serde(default)] pub value: String,
+    #[serde(default)] pub inline: bool,
 }
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct EmbedImage {
@@ -147,6 +163,9 @@ pub struct Message {
     pub embeds: Vec<Embed>,
     #[serde(default)]
     pub pinned: bool,
+    /// Users mentioned in the message, so <@id> can be shown as a name.
+    #[serde(default)]
+    pub mentions: Vec<User>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

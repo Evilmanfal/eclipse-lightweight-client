@@ -24,6 +24,7 @@ mod clipboard;
 mod voice_roster;
 mod login;
 mod message_time;
+mod updater;
 
 use eframe::egui;
 
@@ -83,6 +84,7 @@ fn main() -> eframe::Result {
             }
             app.preview_options(collapsed, dms);
             if let Some(section)=&section {app.preview_section(section);}
+            if section.as_deref()==Some("image-viewer"){message_media::open_viewer(&cc.egui_ctx,"demo://shop/art/viewer");message_media::caption_viewer(&cc.egui_ctx,"You","20:58 · Oct 8, 2026",Some("demo://user/local-you".into()));}
             Ok(Box::new(app))
         }),
     )
