@@ -1,3 +1,9 @@
+# Unreleased
+
+- Messages sent back-to-back by the same person within 7 minutes share one avatar and name; hover a grouped line to see its time. Replies and later messages start a new group.
+- Links in messages and embeds are clickable and shown in link blue (right-click to copy).
+- Link previews are one Discord-style card: colored side bar, site name, linked title, description and fields, with the thumbnail inside the card instead of a large separate picture.
+
 # Eclipse 0.8.2 — October 9, 2026
 
 - The selected server's icon, nameplates, avatar decorations and display-name effects keep animating; other avatars, icons and artwork still animate on hover.

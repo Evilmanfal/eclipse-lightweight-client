@@ -341,6 +341,7 @@ impl Eclipse {
         match section {
             "timestamps"=>{self.messages.drain(..self.messages.len().saturating_sub(3));for(message,days)in self.messages.iter_mut().rev().zip(0..3){message.timestamp=crate::message_time::preview_timestamp(days);}},
             "emoji"|"gifs"=>{if let Some(channel)=&self.channel{self.picker.open(if section=="emoji"{crate::media_picker::Mode::Emoji}else{crate::media_picker::Mode::Gif},&channel.id,self.guild.as_deref(),egui::Rect::from_min_size(egui::pos2(960.,780.),Vec2::splat(30.)));}},
+            "grouping"=>{if let (Some(user),Some(last))=(self.user.clone(),self.messages.back().cloned()){for message in self.messages.iter_mut(){message.timestamp=crate::message_time::preview_timestamp(1);}for(i,text)in["Back-to-back messages share one avatar","https://stremio-addons.net/addons/magnetflix","and stay together for 7 minutes"].into_iter().enumerate(){let mut message=Message{id:format!("group-{i}"),author:user.clone(),content:text.into(),timestamp:crate::message_time::preview_timestamp(0),..last.clone()};message.referenced_message=None;message.reactions.clear();message.attachments.clear();message.embeds.clear();if i==1{message.embeds.push(crate::model::Embed{kind:"rich".into(),title:Some("Magnetflix".into()),description:Some("Addon de filmes, séries e animes dublados e legendados em Português (PT-BR)".into()),url:Some(text.into()),color:Some(0xb06cf0),provider:Some(crate::model::EmbedName{name:Some("Stremio Addons".into()),url:None}),..Default::default()});}self.messages.push_back(message);}}},
             "zoom-in"=>self.prefs.zoom=1.5,
             "zoom-out"=>self.prefs.zoom=0.75,
             "compact"=>self.prefs.compact=true,
@@ -1546,9 +1547,13 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         let search=self.search.to_lowercase();
                         let messages:Vec<_>=crate::timeline::messages(&self.messages,&self.logs,&channel.id).into_iter().filter(|m|search.is_empty()||m.content.to_lowercase().contains(&search)||m.author.name().to_lowercase().contains(&search)).collect();
                         let now=ui.input(|i|i.time);
+                        let mut previous:Option<Message>=None;
                         for message in messages{
+                            let grouped=previous.as_ref().is_some_and(|p|crate::timeline::continues(p,&message));
+                            // Grouped lines sit close together, like one message with several lines.
+                            if previous.is_some(){ui.add_space(if grouped{-6.0}else if self.compact{0.0}else{6.0});}
                             let bg=ui.painter().add(egui::Shape::Noop);
-                            let rect=ui.scope(|ui|self.message_ui(ui,&message)).response.rect;
+                            let rect=ui.scope(|ui|self.message_row(ui,&message,grouped)).response.rect;
                             if self.jump_to.as_ref().is_some_and(|(id,_)|*id==message.id){
                                 ui.scroll_to_rect(rect,Some(egui::Align::Center));self.highlight=Some((message.id.clone(),now));
                                 self.jump_to=self.jump_to.take().and_then(|(id,frames)|(frames>0).then(||(id,frames-1)));
@@ -1557,8 +1562,9 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                                 let fade=1.0-((now-start)/2.5) as f32;
                                 if fade>0.0{let [r,g,b,_]=self.accent().to_array();ui.painter().set(bg,egui::Shape::rect_filled(rect.expand2(Vec2::new(6.0,3.0)),6,Color32::from_rgba_unmultiplied(r,g,b,(fade*55.0) as u8)));ui.ctx().request_repaint();}
                             }
-                            ui.add_space(if self.compact{0.0}else{6.0});
+                            previous=Some(message);
                         }
+                        ui.add_space(if self.compact{0.0}else{6.0});
                         ui.add_space(12.0);
                     });
                     ui.add_space(6.0);self.composer(ui,ctx,&channel);
@@ -1566,7 +1572,10 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             });
     }
 
-    fn message_ui(&mut self, ui: &mut egui::Ui, message: &Message) {
+    fn message_ui(&mut self, ui: &mut egui::Ui, message: &Message) { self.message_row(ui, message, false) }
+    /// One chat message. `grouped` messages continue the previous one from the same person, so they
+    /// skip the avatar and name like Discord.
+    fn message_row(&mut self, ui: &mut egui::Ui, message: &Message, grouped: bool) {
         let deleted=self.logs.iter().any(|e|e.deleted&&e.message.id==message.id&&e.message.channel_id==message.channel_id);
         let versions:Vec<_>=self.logs.iter().filter(|e|!e.deleted&&e.message.id==message.id&&e.message.channel_id==message.channel_id).map(|e|e.message.content.clone()).collect();
         let logged=deleted||!versions.is_empty();
@@ -1577,7 +1586,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
         let response = ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()),|ui| {egui::Frame::NONE
             .fill(Color32::TRANSPARENT)
             .corner_radius(19)
-            .inner_margin(egui::Margin::symmetric(8, if self.compact { 2 } else { 4 }))
+            .inner_margin(egui::Margin::symmetric(8, if self.compact||grouped { 1 } else { 4 }))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 if let Some(reply) = &message.referenced_message {
@@ -1607,6 +1616,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     ui.add_space(if self.compact { 0.0 } else { 2.0 });
                 }
                 ui.horizontal_top(|ui| {
+                    if grouped { ui.add_space(40.0 + ui.spacing().item_spacing.x); } else {
                     self.avatar_with_status(
                         ui,
                         &message.author,
@@ -1614,15 +1624,16 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         40.0,
                         false,
                     );
+                    }
                     ui.add_space(5.0);
                     // Plain chat text keeps server chats, group DMs and DMs visually consistent.
                     ui.vertical(|ui| {
                     egui::Frame::NONE
-                        .inner_margin(egui::Margin::symmetric(0, if self.compact { 0 } else { 3 }))
+                        .inner_margin(egui::Margin::symmetric(0, if self.compact||grouped { 0 } else { 3 }))
                         .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
                         if self.compact { ui.spacing_mut().item_spacing.y = 0.0; }
-                        ui.horizontal_wrapped(|ui| {
+                        if !grouped { ui.horizontal_wrapped(|ui| {
                             let author_response=crate::identity::name(ui,&message.author,message.author.name(),15.,if self.prefs.role_colors{self.server.color(&message.author.id).unwrap_or_else(||name_color(message.author.name()))}else{TEXT});
                             self.guild_tag_chip(ui,&message.author);
                             author_response.context_menu(|ui|self.user_menu(ui,&message.author));if author_response.clicked(){self.toggle_profile_at(&message.author,author_response.rect);}
@@ -1634,14 +1645,16 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                             );
                             if deleted {ui.label(RichText::new("Deleted").size(10.).color(LOG_RED));}
                             else if message.edited_timestamp.is_some() || !versions.is_empty() {ui.label(RichText::new("Edited").size(10.).color(if logged{LOG_RED}else{MUTED}));}
-                        });
+                        }); }
                         if !message.content.is_empty() {
                             let display=self.prefs.display(&crate::message_media::visible_content(message,self.prefs.images));
                             ui.scope(|ui|{if logged{ui.visuals_mut().override_text_color=Some(LOG_RED);}
                                 for response in crate::message_media::body(ui, &mut self.images, &display){if deleted{response.context_menu(|ui|{if ui.button("Copy deleted text").clicked(){ui.ctx().copy_text(message.content.clone());ui.close();}});}else{response.context_menu(|ui|self.message_menu(ui,message));self.message_click(&response,message);}}
                             });
                             if !versions.is_empty(){egui::CollapsingHeader::new(RichText::new(format!("Previous edit{}",if versions.len()==1{""}else{"s"})).size(11.).color(LOG_RED)).id_salt(("edit-history",&message.id)).default_open(true).show(ui,|ui|{ui.visuals_mut().override_text_color=Some(LOG_RED);for text in versions.iter().rev().take(5){crate::message_media::body(ui,&mut self.images,text);}if versions.len()>5{ui.weak(format!("{} earlier edits retained this session",versions.len()-5));}});}
-                            if self.prefs.show_usernames{ui.weak(format!("@{}",message.author.username));}
+                            if grouped&&deleted {ui.label(RichText::new("Deleted").size(10.).color(LOG_RED));}
+                            else if grouped&&(message.edited_timestamp.is_some()||!versions.is_empty()) {ui.label(RichText::new("Edited").size(10.).color(if logged{LOG_RED}else{MUTED}));}
+                            if self.prefs.show_usernames&&!grouped{ui.weak(format!("@{}",message.author.username));}
                             if self.prefs.images&&message.embeds.is_empty() {
                                 for url in crate::message_media::direct_images(&message.content) {
                                     crate::message_media::picture(ui,&mut self.images,&url,None,None,true);
@@ -1680,32 +1693,11 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                             }
                         }
                         for embed in &message.embeds {
-                            if self.prefs.images {
+                            if self.prefs.images&&crate::message_media::media_embed(embed) {
                                 let animated=embed.video.as_ref().filter(|v|embed.kind=="gifv"||v.url.as_ref().is_some_and(|u|u.contains(".gif")));
                                 if let Some(image)=animated.or(embed.image.as_ref()).or(embed.thumbnail.as_ref()) {if let Some(url)=image.url.as_deref().filter(|u|assets::public_url(u)).or(image.proxy_url.as_deref()){crate::message_media::picture(ui,&mut self.images,url,image.width,image.height,true);}}
-                            }
-                            if !(self.prefs.images&&crate::message_media::media_embed(embed)) && (embed.title.is_some() || embed.description.is_some()) {
-                                egui::Frame::NONE
-                                    .fill(CARD)
-                                    .stroke(Stroke::new(1.0_f32, BORDER))
-                                    .corner_radius(8)
-                                    .inner_margin(10)
-                                    .show(ui, |ui| {
-                                        if let Some(title) = &embed.title {
-                                            if let Some(url) =
-                                                embed.url.as_deref().filter(|s| safe_link(s))
-                                            {
-                                                ui.hyperlink_to(title, url);
-                                            } else {
-                                                ui.strong(title);
-                                            }
-                                        }
-                                        if let Some(description) = &embed.description {
-                                            ui.label(
-                                                description.chars().take(1000).collect::<String>(),
-                                            );
-                                        }
-                                    });
+                            } else if embed.title.is_some()||embed.description.is_some()||embed.provider.is_some()||embed.author.is_some()||!embed.fields.is_empty() {
+                                ui.push_id(("embed",&message.id,embed.url.as_deref()),|ui|crate::message_media::embed_card(ui,&mut self.images,embed,self.prefs.images));
                             }
                         }
                         if !deleted && !message.reactions.is_empty() {
@@ -1729,6 +1721,10 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     });
                 });
             });}).response;
+        if grouped&&response.hovered() {
+            let time=self.message_clock.label(&message.timestamp);
+            ui.painter().text(egui::pos2(response.rect.left()+28.0,response.rect.top()+12.0),egui::Align2::CENTER_CENTER,time.chars().take(5).collect::<String>(),egui::FontId::proportional(10.0),MUTED.gamma_multiply(0.65));
+        }
         if self.preview&&self.preview_gesture==Some("message")&&self.user.as_ref().is_some_and(|u|u.id==message.author.id){ui.ctx().data_mut(|d|d.insert_temp(egui::Id::new("preview-gesture-point"),response.rect.center()));}
         if highlight {
             let rect = response.rect;

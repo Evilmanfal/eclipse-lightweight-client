@@ -1,5 +1,7 @@
-use crate::{assets::Images, media_picker, model::{Message,Embed}};
+use crate::{assets::Images, media_picker, model::{Message,Embed,EmbedImage}};
 use eframe::egui::{self, Vec2};
+/// Discord's link blue, so links stand out from message text in every theme.
+pub const LINK: egui::Color32 = egui::Color32::from_rgb(0, 168, 252);
 fn link_token(token:&str)->&str{token.trim_matches(['<','>']).trim_end_matches([',',';'])}
 pub fn direct_images(text:&str)->Vec<String>{
     text.split_whitespace().map(link_token).filter(|s|crate::assets::public_url(s)).take(20).map(str::to_owned).collect()
@@ -67,9 +69,14 @@ pub fn spans(text: &str) -> Vec<Span<'_>> {
     }
     result
 }
+/// The web address inside a word, without surrounding <> or trailing punctuation.
+pub fn link_in(word:&str)->Option<&str>{
+    let link=word.trim_start_matches(['<','(']).trim_end_matches(['>',',',';','.','!','?',':',')','\'','"']);
+    ((link.starts_with("https://")||link.starts_with("http://"))&&crate::model::safe_link(link)).then_some(link)
+}
 pub fn body(ui: &mut egui::Ui, images: &mut Images, text: &str) ->Vec<egui::Response> {
     let spans = spans(text);
-    if !spans.iter().any(|s| matches!(s, Span::Emoji { .. })) {
+    if !spans.iter().any(|s| matches!(s, Span::Emoji { .. })) && !text.split_whitespace().any(|w|link_in(w).is_some()) {
         return vec![ui.add(egui::Label::new(text).wrap().selectable(true))];
     }
     let mut responses=vec![];
@@ -80,9 +87,18 @@ pub fn body(ui: &mut egui::Ui, images: &mut Images, text: &str) ->Vec<egui::Resp
                 Span::Text(text) => {
                     for line in text.split_inclusive('\n') {
                         for word in line.split_inclusive(' ') {
-                            if !word.trim_end_matches('\n').is_empty() {
+                            let word=word.trim_end_matches('\n');
+                            if let Some(link)=link_in(word.trim_end()) {
+                                // Links open in the browser; trailing punctuation stays plain text.
+                                let start=word.find(link).unwrap_or(0);
+                                let rest=word[start+link.len()..].trim_start_matches(['>']);
+                                let shown=if word[..start].ends_with('<'){link}else{&word[..start+link.len()]};
+                                let response=ui.add(egui::Hyperlink::from_label_and_url(egui::RichText::new(shown.trim_start_matches(['<'])).color(LINK),link));
+                                response.context_menu(|ui|{if ui.button("Copy link").clicked(){ui.ctx().copy_text(link.to_owned());ui.close();}});
+                                if !rest.is_empty(){responses.push(ui.add(egui::Label::new(rest).selectable(true)));}
+                            } else if !word.is_empty() {
                                 responses.push(ui.add(
-                                    egui::Label::new(word.trim_end_matches('\n')).selectable(true),
+                                    egui::Label::new(word).selectable(true),
                                 ));
                             }
                         }
@@ -159,6 +175,50 @@ pub fn picture(
     }
     response.context_menu(|ui|{if ui.button("Open image").clicked(){ui.ctx().open_url(egui::OpenUrl::new_tab(url));ui.close();}if ui.button("Copy image link").clicked(){ui.ctx().copy_text(url.to_owned());ui.close();}});
 }
+/// A Discord-style link preview in one card: colored side bar, site name, linked title, description
+/// and fields, with a small thumbnail beside the text or the large image inside the card.
+pub fn embed_card(ui:&mut egui::Ui,images:&mut Images,embed:&Embed,show_images:bool){
+    use egui::{Color32,RichText};
+    let public=|image:&EmbedImage|image.url.as_deref().filter(|u|crate::assets::public_url(u)).or(image.proxy_url.as_deref().filter(|u|crate::assets::public_url(u))).map(|u|(u.to_owned(),image.width,image.height));
+    let large=if !show_images{None}else{embed.image.as_ref().and_then(public).or_else(||matches!(embed.kind.as_str(),"video"|"gifv").then(||embed.thumbnail.as_ref().and_then(public)).flatten())};
+    let small=if !show_images||large.is_some(){None}else{embed.thumbnail.as_ref().and_then(public)};
+    let bar=embed.color.filter(|c|*c!=0).map(|c|Color32::from_rgb((c>>16)as u8,(c>>8)as u8,c as u8)).unwrap_or(Color32::from_gray(78));
+    let muted=Color32::from_gray(170);
+    let width=ui.available_width().min(440.0);
+    let card=egui::Frame::NONE.fill(Color32::from_gray(36)).stroke(egui::Stroke::new(1.0_f32,Color32::from_gray(46))).corner_radius(6).inner_margin(egui::Margin{left:14,right:12,top:10,bottom:12}).show(ui,|ui|{
+        ui.set_width(width-26.0);
+        ui.horizontal_top(|ui|{
+            let text_width=if small.is_some(){ui.available_width()-92.0}else{ui.available_width()};
+            ui.vertical(|ui|{
+                ui.set_width(text_width);ui.spacing_mut().item_spacing.y=4.0;
+                let line=|ui:&mut egui::Ui,text:RichText,url:Option<&str>|match url.filter(|u|crate::model::safe_link(u)){
+                    Some(url)=>{ui.add(egui::Hyperlink::from_label_and_url(text,url));},
+                    None=>{ui.add(egui::Label::new(text).wrap());},
+                };
+                if let Some(site)=&embed.provider{if let Some(name)=&site.name{line(ui,RichText::new(name).size(12.0).color(muted),site.url.as_deref());}}
+                if let Some(author)=&embed.author{if let Some(name)=&author.name{line(ui,RichText::new(name).size(13.0).strong().color(Color32::from_gray(237)),author.url.as_deref());}}
+                if let Some(title)=&embed.title{line(ui,RichText::new(title).size(15.0).strong().color(if embed.url.is_some(){LINK}else{Color32::from_gray(237)}),embed.url.as_deref());}
+                if let Some(description)=&embed.description{body(ui,images,&description.chars().take(1000).collect::<String>());}
+                for field in embed.fields.iter().take(25){
+                    ui.add_space(2.0);ui.label(RichText::new(&field.name).size(13.0).strong().color(Color32::from_gray(237)));
+                    body(ui,images,&field.value.chars().take(1024).collect::<String>());
+                }
+            });
+            if let Some((url,_,_))=&small{
+                ui.add_space(12.0);
+                let (rect,response)=ui.allocate_exact_size(Vec2::splat(80.0),egui::Sense::click());
+                if ui.is_rect_visible(rect){
+                    if let Some(texture)=images.texture_hover(url,rect,ui.ctx()){
+                        egui::Image::new((texture,rect.size())).uv(crate::identity::cover_uv(images.dimensions(url,rect.size(),ui.ctx()).unwrap_or(rect.size()),rect.size())).corner_radius(6).paint_at(ui,rect);
+                    }else{ui.painter().rect_filled(rect,6,Color32::from_gray(46));}
+                }
+                if response.clicked(){if let Some(link)=embed.url.as_deref().filter(|u|crate::model::safe_link(u)){ui.ctx().open_url(egui::OpenUrl::new_tab(link));}}
+            }
+        });
+        if let Some((url,w,h))=&large{ui.add_space(8.0);picture(ui,images,url,*w,*h,false);}
+    }).response.rect;
+    ui.painter().rect_filled(egui::Rect::from_min_max(card.left_top(),egui::pos2(card.left()+4.0,card.bottom())),egui::CornerRadius{nw:6,sw:6,ne:0,se:0},bar);
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +241,13 @@ mod tests {
             let _=ctx.run(input,|ctx|{egui::CentralPanel::default().show(ctx,|ui|{for response in body(ui,&mut images,"A message that can be selected and right-clicked"){rect=response.rect;response.context_menu(|ui|{opened=true;ui.label("Reply");});}});});
         }
         assert!(opened,"Selectable message text swallowed its context menu");
+    }
+    #[test]
+    fn links_are_found_without_brackets_or_trailing_punctuation(){
+        assert_eq!(link_in("https://stremio-addons.net/addons/magnetflix"),Some("https://stremio-addons.net/addons/magnetflix"));
+        assert_eq!(link_in("<https://example.com/a>,"),Some("https://example.com/a"));
+        assert_eq!(link_in("(https://example.com)."),Some("https://example.com"));
+        assert_eq!(link_in("javascript:alert(1)"),None);assert_eq!(link_in("example.com"),None);
     }
     #[test]
     fn unicode_and_custom_keep_surrounding_text() {

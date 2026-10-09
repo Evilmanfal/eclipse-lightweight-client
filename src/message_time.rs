@@ -75,6 +75,8 @@ fn parse_utc(s:&str)->Option<SYSTEMTIME>{
     let utc=i128::from(to_ticks(&time)?)-i128::from(offset)*10_000_000;
     from_ticks(u64::try_from(utc).ok()?)
 }
+/// Seconds since 1601 for an ISO timestamp, used to tell how far apart two messages are.
+pub fn seconds(timestamp:&str)->Option<i64>{parse_utc(timestamp).and_then(|t|to_ticks(&t)).map(|ticks|(ticks/10_000_000)as i64)}
 pub fn preview_timestamp(days_ago:u64)->String{
     let mut now=unsafe{std::mem::zeroed()};unsafe{GetSystemTime(&mut now)};
     let time=to_ticks(&now).and_then(|ticks|ticks.checked_sub(days_ago*864_000_000_000)).and_then(from_ticks).unwrap_or(now);
