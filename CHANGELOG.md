@@ -27,6 +27,9 @@
 
 # Eclipse 0.8.2 — October 9, 2026
 
+- Scrolls move twice as fast. Consecutive messages from the same author share an avatar and heading, with each message retaining its actions.
+- Direct messages sort by newest message, update with incoming/outgoing activity, and show 25 conversations initially with further batches revealed when scrolling down.
+- Removed the Enter/Shift+Enter instruction below the composer; the keyboard shortcuts still work.
 - The selected server's icon, nameplates, avatar decorations and display-name effects keep animating; other avatars, icons and artwork still animate on hover.
 - Fixed Shop and Quests constantly reloading server icons and avatars: off-screen cards no longer request artwork, and the image cache evicts icons and avatars last.
 - The Direct messages header is now a centered conversation search; the Eclipse icon and the separate search box under Quests are gone, moving the DM list up.
