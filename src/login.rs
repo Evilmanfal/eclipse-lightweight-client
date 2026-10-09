@@ -32,19 +32,48 @@ pub struct Mfa {
     pub sms: bool,
     /// Security keys and passkeys need a browser and are not supported natively.
     pub webauthn: bool,
+    /// Ties the 2FA step to the password step on newer Discord versions.
+    pub login_instance_id: Option<String>,
+}
+impl Mfa {
+    /// The body Discord's own client sends with a 2FA code.
+    fn body(&self, code: &str) -> Value {
+        let mut body = json!({ "code": code, "ticket": self.ticket.as_str(), "login_source": null, "gift_code_sku_id": null });
+        if let Some(id) = &self.login_instance_id { body["login_instance_id"] = json!(id); }
+        body
+    }
 }
 
-fn client() -> Result<Client, String> {
-    Client::builder()
+/// One client for every sign-in step, so Discord's session cookies from the password step come
+/// back with the 2FA step. Discord rejects otherwise-correct codes from an unrelated session.
+fn client() -> Result<&'static Client, String> {
+    static CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
+    if let Some(client) = CLIENT.get() { return Ok(client); }
+    let client = Client::builder()
         .timeout(Duration::from_secs(20))
         .user_agent("Eclipse Native")
+        .cookie_store(true)
         .build()
-        .map_err(|_| "Could not start a secure connection to Discord.".to_owned())
+        .map_err(|_| "Could not start a secure connection to Discord.".to_owned())?;
+    Ok(CLIENT.get_or_init(|| client))
+}
+
+/// Discord's browser fingerprint for this sign-in session, sent as X-Fingerprint on every step.
+fn fingerprint(client: &Client) -> Option<String> {
+    static FINGERPRINT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    let mut cached = FINGERPRINT.lock().ok()?;
+    if cached.is_none() {
+        let value: Value = client.get(format!("{API}/experiments")).send().ok()?.json().ok()?;
+        *cached = value["fingerprint"].as_str().filter(|f| f.len() < 128).map(str::to_owned);
+    }
+    cached.clone()
 }
 
 fn post(route: &str, body: Value) -> Result<Value, (u16, Value)> {
     let client = client().map_err(|e| (0, json!({ "message": e })))?;
-    let response = client.post(format!("{API}{route}")).json(&body).send().map_err(|_| (0, json!({ "message": "Discord could not be reached. Check your connection." })))?;
+    let mut request = client.post(format!("{API}{route}")).json(&body);
+    if let Some(fingerprint) = fingerprint(client) { request = request.header("X-Fingerprint", fingerprint); }
+    let response = request.send().map_err(|_| (0, json!({ "message": "Discord could not be reached. Check your connection." })))?;
     let status = response.status().as_u16();
     let value: Value = response.json().unwrap_or(Value::Null);
     if (200..300).contains(&status) { Ok(value) } else { Err((status, value)) }
@@ -55,7 +84,7 @@ fn explain(status: u16, body: &Value) -> String {
     if body.get("captcha_key").is_some() || body.get("captcha_sitekey").is_some() {
         return "Discord asked for a captcha, which only works in a browser. Use the QR code instead.".into();
     }
-    let field = ["login", "password", "code"].iter().find_map(|f| body["errors"][f]["_errors"][0]["message"].as_str());
+    let field = ["login", "password", "code", "ticket"].iter().find_map(|f| body["errors"][f]["_errors"][0]["message"].as_str());
     if let Some(message) = field { return message.to_owned(); }
     if status == 429 { return "Too many attempts. Wait a moment and try again.".into(); }
     body["message"].as_str().filter(|m| m.len() < 300).unwrap_or("Discord rejected the sign-in.").to_owned()
@@ -73,6 +102,7 @@ fn outcome(result: Result<Value, (u16, Value)>) -> Outcome {
                         backup: body["backup"] == true,
                         sms: body["sms"] == true,
                         webauthn: body["webauthn"].is_string(),
+                        login_instance_id: body["login_instance_id"].as_str().filter(|id| id.len() < 128).map(str::to_owned),
                     });
                 }
             }
@@ -96,22 +126,18 @@ pub fn password(ctx: &egui::Context, login: String, password: Zeroizing<String>)
 }
 /// Authenticator-app codes and 8-character backup codes.
 pub fn code(ctx: &egui::Context, mfa: &Mfa, code: String) -> Receiver<Outcome> {
-    let ticket = mfa.ticket.clone();
+    let mfa = mfa.clone();
     let compact: String = code.chars().filter(|c| !c.is_whitespace() && *c != '-').collect();
-    let route = if compact.len() == 8 && mfa.backup { "/auth/mfa/backup" } else { "/auth/mfa/totp" };
-    spawn(ctx, move || match outcome(post(route, json!({ "code": compact, "ticket": ticket.as_str() }))) {
-        // Older accounts accept backup codes on the authenticator endpoint.
-        Outcome::Error(_) if route == "/auth/mfa/backup" => outcome(post("/auth/mfa/totp", json!({ "code": compact, "ticket": ticket.as_str() }))),
-        other => other,
-    })
+    // Discord's client sends authenticator and 8-character backup codes to the same endpoint.
+    spawn(ctx, move || outcome(post("/auth/mfa/totp", mfa.body(&compact))))
 }
 pub fn send_sms(ctx: &egui::Context, mfa: &Mfa) -> Receiver<Outcome> {
     let ticket = mfa.ticket.clone();
     spawn(ctx, move || outcome(post("/auth/mfa/sms/send", json!({ "ticket": ticket.as_str() }))))
 }
 pub fn sms(ctx: &egui::Context, mfa: &Mfa, code: String) -> Receiver<Outcome> {
-    let ticket = mfa.ticket.clone();
-    spawn(ctx, move || outcome(post("/auth/mfa/sms", json!({ "code": code.trim(), "ticket": ticket.as_str() }))))
+    let mfa = mfa.clone();
+    spawn(ctx, move || outcome(post("/auth/mfa/sms", mfa.body(code.trim()))))
 }
 
 /// Progress of a QR-code sign-in.
@@ -273,5 +299,13 @@ mod tests {
         assert!(captcha.contains("QR"));
         let Outcome::Error(field) = outcome(Err((400, json!({"errors":{"password":{"_errors":[{"message":"Login or password is invalid."}]}}})))) else { panic!() };
         assert_eq!(field, "Login or password is invalid.");
+        let Outcome::Error(code) = outcome(Err((400, json!({"message":"Invalid two-factor code","code":60008})))) else { panic!() };
+        assert_eq!(code, "Invalid two-factor code");
+        let Outcome::Error(ticket) = outcome(Err((400, json!({"errors":{"ticket":{"_errors":[{"code":"MFA_INVALID_TICKET","message":"Invalid two-factor auth ticket"}]}}})))) else { panic!() };
+        assert_eq!(ticket, "Invalid two-factor auth ticket");
+        let mfa = Mfa { ticket: Zeroizing::new("t".into()), login_instance_id: Some("i".into()), ..Default::default() };
+        let body = mfa.body("123456");
+        assert_eq!((body["code"].as_str(), body["ticket"].as_str(), body["login_instance_id"].as_str()), (Some("123456"), Some("t"), Some("i")));
+        assert!(body["login_source"].is_null() && body.get("gift_code_sku_id").is_some());
     }
 }
