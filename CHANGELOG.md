@@ -1,5 +1,6 @@
 # Unreleased
 
+- Update prompt at launch: when GitHub has a newer Eclipse release, Eclipse asks whether to update. Yes downloads it, checks it against the release checksum, installs it and restarts; No keeps a green update button in the top right to update later.
 - Links in messages and embeds are clickable and shown in link blue (right-click to copy).
 - Link previews are one Discord-style card: colored side bar, site name, linked title, description and fields, with the thumbnail inside the card instead of a large separate picture.
 - Click a picture in chat to open it like Discord's viewer: shown at its own size (shrunk only to fit) over the dimmed app, with the sender and time at the top left and zoom, open in browser, copy link and close at the top right. Esc or a click outside closes it.

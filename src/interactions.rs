@@ -2,8 +2,66 @@ use super::*;
 impl Eclipse {
     pub(in crate::ui) fn extra_dialogs(&mut self,ctx:&egui::Context){
         self.settings_window(ctx);self.server_settings_window(ctx);
-        self.profile_popout(ctx);self.full_profile_window(ctx);self.account_menu(ctx);crate::message_media::viewer(ctx,&mut self.images);crate::message_media::save_status(ctx);
+        self.profile_popout(ctx);self.full_profile_window(ctx);self.account_menu(ctx);crate::message_media::viewer(ctx,&mut self.images);crate::message_media::save_status(ctx);self.update_prompt(ctx);
         if let Some((title,command))=self.confirm.take(){let mut open=true;let mut decision=None;egui::Window::new("Confirm action").id(egui::Id::new("confirm-action")).open(&mut open).collapsible(false).resizable(false).show(ctx,|ui|{ui.label(&title);ui.horizontal(|ui|{if ui.button(RichText::new("Confirm").color(Color32::LIGHT_RED)).clicked(){decision=Some(true);}if ui.button("Cancel").clicked(){decision=Some(false);}});});match decision{Some(true)=>{if self.preview{self.error=Some("Offline preview: no action sent.".into());}else{self.send_command(command);}},Some(false)=>{},None if open=>self.confirm=Some((title,command)),None=>{}}}
+    }
+    pub(in crate::ui) fn updater_later(&self)->bool{self.updater.later()}
+    /// The launch-time update prompt, the progress dialog while installing, and the green update
+    /// button in the top right after the user chose No.
+    pub(in crate::ui) fn update_prompt(&mut self,ctx:&egui::Context){
+        use crate::updater::State;
+        if let Some(exe)=self.updater.poll(){
+            // Start the new version and close this one.
+            if std::process::Command::new(&exe).spawn().is_ok(){ctx.send_viewport_cmd(egui::ViewportCommand::Close);}
+            else{self.error=Some("Eclipse was updated. Restart it to use the new version.".into());}
+        }
+        if let State::Failed(_,error)=&self.updater.state{self.error=Some(format!("Update failed: {error}"));}
+        let green=Color32::from_rgb(35,165,90);
+        match &self.updater.state{
+            State::Prompt(release)=>{
+                let version=release.version.clone();let mut choice=None;
+                let modal=egui::Modal::new(egui::Id::new("update-prompt")).show(ctx,|ui|{
+                    ui.set_width(340.0);
+                    ui.label(RichText::new("Update available").size(18.0).strong());ui.add_space(6.0);
+                    ui.label(format!("Eclipse {version} is available. You have {}. Update now?",env!("CARGO_PKG_VERSION")));
+                    ui.label(RichText::new("Eclipse will download the update from GitHub and restart.").size(12.0).color(MUTED));
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui|{
+                        if ui.add(egui::Button::new(RichText::new("Yes").color(Color32::WHITE).strong()).fill(green).min_size(Vec2::new(80.0,30.0))).clicked(){choice=Some(true);}
+                        if ui.add(egui::Button::new("No").min_size(Vec2::new(80.0,30.0))).clicked(){choice=Some(false);}
+                    });
+                });
+                if modal.should_close()&&choice.is_none(){choice=Some(false);}
+                match choice{Some(true)=>self.updater.install(ctx),Some(false)=>self.updater.decline(),None=>{}}
+            }
+            State::Installing(release,_)=>{
+                let version=release.version.clone();
+                egui::Modal::new(egui::Id::new("update-progress")).show(ctx,|ui|{
+                    ui.set_width(300.0);
+                    ui.horizontal(|ui|{ui.spinner();ui.label(format!("Downloading Eclipse {version}…"));});
+                    ui.label(RichText::new("Eclipse will restart when the update is installed.").size(12.0).color(MUTED));
+                });
+            }
+            _=>{}
+        }
+        if let State::Failed(release,_)=&self.updater.state{self.updater.state=State::Later(release.clone());}
+        if let State::Later(release)=&self.updater.state{
+            let tip=format!("Update to Eclipse {}",release.version);
+            let rect=egui::Rect::from_min_size(egui::pos2(ctx.screen_rect().right()-50.0,14.0),Vec2::splat(32.0));
+            let clicked=egui::Area::new(egui::Id::new("update-button")).order(egui::Order::Foreground).fixed_pos(rect.min).show(ctx,|ui|{
+                let (rect,response)=ui.allocate_exact_size(rect.size(),egui::Sense::click());
+                let fill=if response.hovered(){Color32::from_rgb(45,190,105)}else{green};
+                ui.painter().circle_filled(rect.center(),16.0,fill);
+                // Download arrow.
+                let (c,s)=(rect.center(),Stroke::new(2.0_f32,Color32::WHITE));
+                ui.painter().line_segment([c-Vec2::new(0.0,7.0),c+Vec2::new(0.0,3.0)],s);
+                ui.painter().line_segment([c+Vec2::new(-4.5,-1.5),c+Vec2::new(0.0,3.0)],s);
+                ui.painter().line_segment([c+Vec2::new(4.5,-1.5),c+Vec2::new(0.0,3.0)],s);
+                ui.painter().line_segment([c+Vec2::new(-6.0,7.0),c+Vec2::new(6.0,7.0)],s);
+                response.on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
+            }).inner;
+            if clicked{self.updater.reopen();}
+        }
     }
     pub(in crate::ui) fn message_menu(&mut self,ui:&mut egui::Ui,message:&Message){
         if ui.button("Reply").clicked(){self.reply=Some(message.clone());ui.close();}

@@ -141,6 +141,7 @@ pub struct Eclipse {
     audio_devices:Option<discord_voice::audio::DeviceList>,
     last_typing:Option<Instant>,
     composer_ime: bool,
+    updater: crate::updater::Updater,
 }
 impl Eclipse {
     pub fn new(cc: &eframe::CreationContext<'_>, preview: bool, smoke: Option<String>) -> Self {
@@ -148,6 +149,8 @@ impl Eclipse {
         let mut app=Self::with_context(&cc.egui_ctx,preview,smoke);
         // Stay signed in: resume the session saved in Windows Credential Manager.
         if restore{if let Some(token)=crate::login::saved::load(){app.begin_session(token,&cc.egui_ctx);app.auto_login=true;}}
+        // Look for a newer release on GitHub; a prompt appears if there is one.
+        if restore{app.updater.check(&cc.egui_ctx);}
         app
     }
     fn with_context(ctx:&egui::Context,preview:bool,smoke:Option<String>)->Self {
@@ -249,7 +252,7 @@ impl Eclipse {
             picker: Default::default(),
             calls: crate::calls::Calls::new(ctx.clone()),
             applied_prefs:prefs.clone(),prefs,prefs_save_at:None,home:Home::Chat,
-            settings_page:"Account & Profile".into(),settings_search:String::new(),server_settings:false,server_page:"Overview".into(),server:Default::default(),features:HashMap::new(),feature_errors:HashMap::new(),feature_pending:HashSet::new(),account_edit:serde_json::Value::Null,settings_edit:serde_json::Value::Null,server_edit:serde_json::Value::Null,role_edit:None,profile:None,friends:vec![],friend_filter:"Online".into(),friend_search:String::new(),friend_add:String::new(),member_search:String::new(),reply:None,logs:VecDeque::new(),profile_anchor:None,profile_guild:None,profile_just_opened:false,voice_revealed:None,shop_filter:"All".into(),quest_filter:"Discover".into(),spotify:None,game_activity:true,read_latest:HashMap::new(),confirm:None,hotkey_record:None,audio_devices:None,last_typing:None,composer_ime:false,
+            settings_page:"Account & Profile".into(),settings_search:String::new(),server_settings:false,server_page:"Overview".into(),server:Default::default(),features:HashMap::new(),feature_errors:HashMap::new(),feature_pending:HashSet::new(),account_edit:serde_json::Value::Null,settings_edit:serde_json::Value::Null,server_edit:serde_json::Value::Null,role_edit:None,profile:None,friends:vec![],friend_filter:"Online".into(),friend_search:String::new(),friend_add:String::new(),member_search:String::new(),reply:None,logs:VecDeque::new(),profile_anchor:None,profile_guild:None,profile_just_opened:false,voice_revealed:None,shop_filter:"All".into(),quest_filter:"Discover".into(),spotify:None,game_activity:true,read_latest:HashMap::new(),confirm:None,hotkey_record:None,audio_devices:None,last_typing:None,composer_ime:false,updater:Default::default(),
         };
         app.calls.configure(&app.prefs);
         app.images.playback_options(app.prefs.animations&&!app.prefs.reduced_motion,app.prefs.animation_fps);
@@ -342,6 +345,8 @@ impl Eclipse {
             "timestamps"=>{self.messages.drain(..self.messages.len().saturating_sub(3));for(message,days)in self.messages.iter_mut().rev().zip(0..3){message.timestamp=crate::message_time::preview_timestamp(days);}},
             "emoji"|"gifs"=>{if let Some(channel)=&self.channel{self.picker.open(if section=="emoji"{crate::media_picker::Mode::Emoji}else{crate::media_picker::Mode::Gif},&channel.id,self.guild.as_deref(),egui::Rect::from_min_size(egui::pos2(960.,780.),Vec2::splat(30.)));}},
             "link-preview"=>{if let (Some(user),Some(last))=(self.user.clone(),self.messages.back().cloned()){let link="https://stremio-addons.net/addons/magnetflix";let mut message=Message{id:"link-preview".into(),author:user,content:link.into(),..last};message.referenced_message=None;message.reactions.clear();message.attachments.clear();message.embeds=vec![crate::model::Embed{kind:"rich".into(),title:Some("Magnetflix".into()),description:Some("Addon de filmes, séries e animes dublados e legendados em Português (PT-BR)".into()),url:Some(link.into()),color:Some(0xb06cf0),provider:Some(crate::model::EmbedName{name:Some("Stremio Addons".into()),url:None}),..Default::default()}];self.messages.push_back(message);}},
+            "update-prompt"=>self.updater.preview(false),
+            "update-button"=>self.updater.preview(true),
             "zoom-in"=>self.prefs.zoom=1.5,
             "zoom-out"=>self.prefs.zoom=0.75,
             "compact"=>self.prefs.compact=true,
@@ -1421,6 +1426,8 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
                                     use crate::widgets::{header_icon,HeaderIcon};
+                                    // Room for the green update button, which floats in the top right.
+                                    if self.updater.later(){ui.add_space(40.0);}
                                     if header_icon(ui,HeaderIcon::People,if self.show_members{TEXT}else{MUTED},if self.show_members{"Hide member list"}else{"Show member list"}).clicked()
                                     {
                                         self.show_members = !self.show_members;self.prefs.members=self.show_members;

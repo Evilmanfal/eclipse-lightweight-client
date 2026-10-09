@@ -24,6 +24,7 @@ mod clipboard;
 mod voice_roster;
 mod login;
 mod message_time;
+mod updater;
 
 use eframe::egui;
 
