@@ -372,6 +372,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             "roles"=>{self.server_settings=true;self.server_page="Roles".into();},
             "friends"=>{self.navigate_home(Home::Friends);self.friend_filter="All".into();},
             "nitro"=>self.navigate_home(Home::Nitro),"shop"=>self.navigate_home(Home::Shop),"quests"=>self.navigate_home(Home::Quests),
+            "call-live"|"call-watching"|"share-picker"=>{if let(Some(channel),Some(user))=(self.channel.clone(),self.user.clone()){let mut seen=HashSet::new();let peers=self.messages.iter().map(|m|m.author.clone()).filter(|u|u.id!=user.id&&seen.insert(u.id.clone())).take(3).collect();self.calls.preview(channel,user,peers);if section!="share-picker"{self.calls.preview_live(section=="call-watching");}else{self.calls.preview_picker();}}},
             "call"=>{if let(Some(channel),Some(user))=(self.channel.clone(),self.user.clone()){let mut seen=HashSet::new();let peers=self.messages.iter().map(|m|m.author.clone()).filter(|u|u.id!=user.id&&seen.insert(u.id.clone())).take(3).collect();self.calls.preview(channel,user,peers);}},
             _=>{}
         }
@@ -2089,7 +2090,7 @@ impl eframe::App for Eclipse {
             self.login(ctx);
         } else {
             self.left_column(ctx);
-            if self.home!=Home::Chat{self.home_panel(ctx);}else{self.conversation_header(ctx);if self.calls.active()&&!self.calls.chat{self.sync_call_roster();egui::CentralPanel::default().frame(egui::Frame::NONE.fill(preferences_bg(&self.prefs)).inner_margin(if self.compact{0}else{8})).show(ctx,|ui|self.calls.stage(ui,&mut self.images));}else{self.members(ctx);self.conversation(ctx);}}
+            if self.home!=Home::Chat{self.home_panel(ctx);}else{self.conversation_header(ctx);if self.calls.active(){self.sync_call_roster();}if self.calls.active()&&!self.calls.chat{egui::CentralPanel::default().frame(egui::Frame::NONE.fill(preferences_bg(&self.prefs)).inner_margin(if self.compact{0}else{8})).show(ctx,|ui|self.calls.stage(ui,&mut self.images));}else{self.members(ctx);self.conversation(ctx);}}
         }
         self.dialogs(ctx);
         if self.home!=Home::Chat||self.settings||self.server_settings||self.channel.as_ref().is_none_or(|c|c.id!=self.picker.channel)||self.calls.active()&&!self.calls.chat{self.picker.close();}

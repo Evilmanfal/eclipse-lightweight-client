@@ -1,5 +1,7 @@
 # Unreleased
 
+- Watch screen shares like Discord: a live friend's call tile shows LIVE and a Watch Stream button, including friends who were already live when you joined. Hovering a live friend under a voice channel also offers Watch Stream (joining the channel first if needed). The watched stream fills the stage with Stop Watching and a volume control, and everyone else sits in a strip below.
+- Sharing your screen opens a Discord-style Screen Share dialog with Applications and Screens tabs, resolution and frame-rate choices, sound sharing and Go Live, instead of a separate window.
 - Shift-hover quick delete removes the message at once, without a confirmation (the right-click Delete still asks).
 - Editing a message happens in place, like Discord: the message turns into an outlined, already-focused edit box with "escape to cancel • enter to save" under it. The separate edit popup is gone.
 - Update prompt at launch: when GitHub has a newer Eclipse release, Eclipse asks whether to update. Yes downloads it, checks it against the release checksum, installs it and restarts; No keeps a green update button in the top right to update later.
