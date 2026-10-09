@@ -1,5 +1,7 @@
 # Unreleased
 
+- Right-click someone under a voice channel for voice moderation, shown only with the matching server permission: Server Mute, Server Deafen, Move To (any other voice channel) and Disconnect.
+- Stream preview pictures load (Discord serves them without a file extension), and the hover popup says why when there is no picture.
 - Push to talk sounds clean from the first word: releasing the key now only stops sending, instead of muting, which restarted echo cancellation and noise suppression on every press (static at the start, muffled short phrases).
 - Share your screen while watching someone else's stream (no more "Stop watching" call error).
 - Watch your own stream: your call tile shows what you're sharing (960x540, 30 fps) with View Your Stream to see it large, full screen or enlarged.

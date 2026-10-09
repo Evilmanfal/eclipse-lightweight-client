@@ -13,6 +13,9 @@ pub struct VoiceState {
     pub channel_id: String,
     pub muted: bool,
     pub deafened: bool,
+    /// Muted or deafened by a moderator (not by themselves).
+    pub server_muted: bool,
+    pub server_deafened: bool,
     pub video: bool,
     pub streaming: bool,
     /// Present when Discord attached the member to the state.
@@ -69,6 +72,8 @@ impl VoiceRoster {
             channel_id: channel.to_owned(),
             muted: flag("mute") || flag("self_mute") || flag("suppress"),
             deafened: flag("deaf") || flag("self_deaf"),
+            server_muted: flag("mute"),
+            server_deafened: flag("deaf"),
             video: flag("self_video"),
             streaming: flag("self_stream"),
             user: member_user.or_else(|| previous.and_then(|s| s.user.clone())),
@@ -98,6 +103,9 @@ mod tests {
         assert!(states[0].muted && !states[0].streaming && states[1].streaming);
         // Another client joins, with member data attached.
         roster.ingest("VOICE_STATE_UPDATE", &json!({"guild_id":"1","user_id":"12","channel_id":"101","self_deaf":true,"member":{"nick":"Nick","user":{"id":"12","username":"twelve"}}}));
+        roster.ingest("VOICE_STATE_UPDATE", &json!({"guild_id":"1","user_id":"13","channel_id":"199","mute":true,"self_deaf":true}));
+        let moderated = roster.in_channel("199").into_iter().find(|s| s.user_id == "13").unwrap();
+        assert!(moderated.server_muted && moderated.muted && !moderated.server_deafened && moderated.deafened, "moderator mutes are told apart from self mutes");
         let joined = &roster.in_channel("101")[0];
         assert!(joined.deafened && joined.nick.as_deref() == Some("Nick") && joined.user.as_ref().unwrap().username == "twelve");
         // Moving channels and leaving.

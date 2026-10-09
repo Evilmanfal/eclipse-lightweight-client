@@ -155,7 +155,11 @@ impl Eclipse {
         if in_call&&!states.iter().any(|s|s.user_id==me){states.insert(0,crate::voice_roster::VoiceState{user_id:me.clone(),guild_id:channel.guild_id.clone(),channel_id:channel.id.clone(),..Default::default()});}
         if states.is_empty(){return;}
         let mut missing=vec![];
-        let mut watch=None;let mut hovered_live=None;
+        let mut watch=None;let mut hovered_live=None;let mut moderation=None;
+        // Voice moderation needs the matching server permission (Mute, Deafen, Move Members).
+        let here=channel.guild_id.as_deref().is_some_and(|g|g==self.server.id);
+        let (can_mute,can_deafen,can_move)=(here&&self.server.can(&me,22),here&&self.server.can(&me,23),here&&self.server.can(&me,24));
+        let destinations:Vec<(String,String)>=if can_move{self.channels.iter().filter(|c|matches!(c.kind,2|13)&&c.id!=channel.id&&c.guild_id==channel.guild_id).map(|c|(c.id.clone(),c.label())).collect()}else{vec![]};
         for state in states.iter().take(99){
             let (user,name)=self.voice_identity(state);
             if user.username.is_empty(){missing.push(state.user_id.clone());}
@@ -167,9 +171,14 @@ impl Eclipse {
             let offer=state.streaming&&!own&&ui.rect_contains_pointer(row)&&!(in_call&&self.calls.watching()==Some(state.user_id.as_str()));
             if offer{hovered_live=Some((state.user_id.clone(),row));}
             let (muted,deafened)=if own{(self.calls.muted(),self.calls.deafened())}else{(state.muted,state.deafened)};
+            // Right-clicking anywhere on the row opens the person's menu plus voice moderation.
+            let row_response=ui.interact(row,egui::Id::new(("voice-row",&channel.id,&state.user_id)),egui::Sense::click());
             ui.horizontal(|ui|{
                 ui.spacing_mut().item_spacing.x=6.;ui.add_space(26.);
-                let before=ui.cursor().min;self.avatar_with_status(ui,&user,None,22.,false);
+                let before=ui.cursor().min;
+                let avatar=self.paint_avatar(ui,&user,None,22.,false);
+                if avatar.clicked(){self.toggle_profile_at(&user,avatar.rect);}
+                avatar.context_menu(|ui|{self.user_menu(ui,&user);if let Some(choice)=voice_moderation_menu(ui,state,can_mute,can_deafen,can_move,&destinations){moderation=Some(choice);}});
                 if speaking{ui.painter().circle_stroke(before+Vec2::splat(11.),12.,Stroke::new(2.0_f32,Color32::from_rgb(67,181,129)));}
                 // Reserve room for the state icons so long names truncate instead of pushing them off.
                 let icons=if own{22.}else{if deafened||muted{20.}else{0.}}+if state.video{20.}else{0.}+if offer{86.}else if state.streaming{34.}else{0.};
@@ -196,8 +205,13 @@ impl Eclipse {
                     }
                 });
             });
+            row_response.context_menu(|ui|{self.user_menu(ui,&user);if let Some(choice)=voice_moderation_menu(ui,state,can_mute,can_deafen,can_move,&destinations){moderation=Some(choice);}});
         }
         if let Some(user)=watch{self.watch_stream(channel,&user);}
+        if let (Some((user,change)),Some(guild))=(moderation,channel.guild_id.clone()){
+            if self.preview{self.error=Some("Offline preview: voice moderation is not sent to Discord.".into());}
+            else{self.mutate("voice-moderation",reqwest::Method::PATCH,format!("/guilds/{guild}/members/{user}"),Some(change));}
+        }
         if let Some((user,row))=hovered_live{
             let _=self.stream_preview(channel,&user);
             let status=self.stream_preview_status(channel,&user);
@@ -266,4 +280,24 @@ pub(in crate::ui) fn profile_metadata(data:&Value)->Value {
     let mut metadata=data["user_profile"].clone();
     if let Some(server)=data["guild_member_profile"].as_object(){if !metadata.is_object(){metadata=json!({});}for(key,value)in server{if !value.is_null(){metadata[key]=value.clone();}}}
     metadata
+}
+
+/// Discord's voice moderation items for someone under a voice channel. Returns the member
+/// change to send (PATCH /guilds/{guild}/members/{user}) when one is chosen.
+pub(in crate::ui) fn voice_moderation_menu(ui:&mut egui::Ui,state:&crate::voice_roster::VoiceState,can_mute:bool,can_deafen:bool,can_move:bool,destinations:&[(String,String)])->Option<(String,serde_json::Value)>{
+    if !(can_mute||can_deafen||can_move){return None;}
+    let mut change=None;
+    ui.separator();
+    if can_mute&&ui.checkbox(&mut state.server_muted.clone(),"Server Mute").clicked(){change=Some(serde_json::json!({"mute":!state.server_muted}));ui.close();}
+    if can_deafen&&ui.checkbox(&mut state.server_deafened.clone(),"Server Deafen").clicked(){change=Some(serde_json::json!({"deaf":!state.server_deafened}));ui.close();}
+    if can_move{
+        ui.menu_button("Move To",|ui|{
+            if destinations.is_empty(){ui.weak("No other voice channels");}
+            egui::ScrollArea::vertical().max_height(300.).show(ui,|ui|{
+                for (id,label) in destinations{if ui.button(label).clicked(){change=Some(serde_json::json!({"channel_id":id}));ui.close();}}
+            });
+        });
+        if ui.button(RichText::new("Disconnect").color(Color32::from_rgb(242,63,67))).clicked(){change=Some(serde_json::json!({"channel_id":null}));ui.close();}
+    }
+    change.map(|change|(state.user_id.clone(),change))
 }

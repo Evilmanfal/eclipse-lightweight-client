@@ -16,7 +16,7 @@ use serde_json::{json,Value};
 #[path="mentions.rs"] mod mentions;
 pub(in crate::ui) use login_screen::LoginUi;
 pub(in crate::ui) use user_panel::USER_PANEL_HEIGHT;
-pub(in crate::ui) use profile_popout::profile_key_for;
+pub(in crate::ui) use profile_popout::{profile_key_for,voice_moderation_menu};
 
 impl Eclipse {
     pub(super) fn request_feature(&mut self,key:&str,route:String){

@@ -2448,6 +2448,20 @@ mod interaction_tests {
         frame(&mut app,&message,vec![egui::Event::Key{key:egui::Key::Escape,physical_key:None,pressed:true,repeat:false,modifiers:Default::default()}]);
         assert!(app.edit.is_none());
     }
+    #[test]fn voice_moderation_menu_sends_mute_and_disconnect_and_is_hidden_without_permission(){
+        let ctx=egui::Context::default();
+        let state=crate::voice_roster::VoiceState{user_id:"77".into(),server_muted:true,..Default::default()};
+        let destinations=vec![("9".to_owned(),"Lounge".to_owned())];
+        let run=|events:Vec<egui::Event>,allowed:bool|{let mut chosen=None;let output=ctx.run(input(events),|ctx|{egui::CentralPanel::default().show(ctx,|ui|{chosen=panels::voice_moderation_menu(ui,&state,allowed,allowed,allowed,&destinations);});});(chosen,output)};
+        let (_,output)=run(vec![],true);
+        let at=|label:&str|output.shapes.iter().find_map(|s|match &s.shape{egui::Shape::Text(t)if t.galley.job.text==label=>Some(t.visual_bounding_rect().center()),_=>None}).unwrap_or_else(||panic!("{label} shown"));
+        let (mute,disconnect)=(at("Server Mute"),at("Disconnect"));
+        let click=|pos|vec![egui::Event::PointerMoved(pos),egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed:true,modifiers:Default::default()},egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed:false,modifiers:Default::default()}];
+        assert_eq!(run(click(disconnect),true).0,Some(("77".to_owned(),serde_json::json!({"channel_id":null}))));
+        assert_eq!(run(click(mute),true).0,Some(("77".to_owned(),serde_json::json!({"mute":false}))),"server-muted, so the click unmutes");
+        let (chosen,output)=run(vec![],false);
+        assert!(chosen.is_none()&&!output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t)if t.galley.job.text=="Disconnect")),"no moderation without permission");
+    }
     fn composer_frame(ctx:&egui::Context,app:&mut Eclipse,channel:&Channel,events:Vec<egui::Event>)->egui::FullOutput{ctx.run(input(events),|ctx|{egui::CentralPanel::default().show(ctx,|ui|{app.composer(ui,ctx,channel);});})}
     #[test]fn typing_at_lists_members_and_enter_inserts_a_mention_sent_as_an_id(){
         let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);let channel=app.channel.clone().unwrap();let before=app.messages.len();
