@@ -25,6 +25,13 @@ struct VideoFrame {
     user: u64,
     image: egui::ColorImage,
 }
+#[derive(Default)]
+struct StreamConn {
+    server: Option<Id>,
+    channel: Option<Id>,
+    token: Option<Zeroizing<String>>,
+    endpoint: Option<String>,
+}
 struct Session {
     ptt_stop:Arc<AtomicBool>,
     runtime: tokio::runtime::Runtime,
@@ -41,10 +48,10 @@ struct Session {
     screen_video: Option<voice::screen::Video>,
     screen_task: Option<tokio::task::JoinHandle<()>>,
     watch_task: Option<tokio::task::JoinHandle<()>>,
-    stream_server: Option<Id>,
-    stream_channel: Option<Id>,
-    stream_token: Option<Zeroizing<String>>,
-    stream_endpoint: Option<String>,
+    /// Discord's stream server details, kept apart for your own share and the stream you
+    /// watch so both can run at once.
+    share_conn: StreamConn,
+    watch_conn: StreamConn,
 }
 impl Drop for Session {
     fn drop(&mut self) {
@@ -85,12 +92,23 @@ pub struct Calls {
     rx: crossbeam_channel::Receiver<(u64, Notice)>,
     active_epoch: Arc<AtomicU64>,
     participants: HashMap<String, User>,
+    /// Participant ids in the order they joined, so newcomers appear on the right.
+    join_order: Vec<String>,
     speaking: Vec<u64>,
     frames: Arc<Mutex<HashMap<u64, VideoFrame>>>,
     textures: HashMap<u64, egui::TextureHandle>,
     /// The watched screen share at full resolution, separate from the small camera tiles.
     stream_frame: Arc<Mutex<Option<egui::ColorImage>>>,
     stream_texture: Option<egui::TextureHandle>,
+    /// What you are sharing, from the capture preview (up to 640x360, about ten times a second).
+    own_preview: Option<egui::TextureHandle>,
+    /// Your own stream fills the stage instead of the participant tiles.
+    pub view_own: bool,
+    /// Preview pictures of other people's streams, by user id (fetched by the app).
+    pub previews: HashMap<String, String>,
+    /// When your next stream preview picture is due, and one waiting to be uploaded.
+    upload_due: Option<Instant>,
+    upload: Option<(String, String)>,
     /// The watched stream fills the whole call area (no participant strip).
     pub expanded: bool,
     fullscreen: bool,
@@ -183,6 +201,7 @@ impl Calls {
             ctx,
             active_epoch,
             participants: HashMap::new(),
+            join_order: Vec::new(),
             speaking: vec![],
             channel: None,
             user: None,
@@ -196,6 +215,11 @@ impl Calls {
             textures: HashMap::new(),
             stream_frame: Arc::new(Mutex::new(None)),
             stream_texture: None,
+            own_preview: None,
+            view_own: false,
+            previews: HashMap::new(),
+            upload_due: None,
+            upload: None,
             expanded: false,
             fullscreen: false,
             sink,
@@ -262,6 +286,7 @@ impl Calls {
         self.epoch = self.epoch.wrapping_add(1);
         self.active_epoch.store(self.epoch, Ordering::Release);
         self.participants.clear();
+        self.join_order.clear();
         self.speaking.clear();
         self.pending_watch = None;
         self.left_stream = None;
@@ -402,16 +427,15 @@ impl Calls {
                 if key.is_some()
                     && (key == self.stream_key.as_deref() || key == self.watch_key.as_deref())
                 {
+                    let sharing = key == self.stream_key.as_deref();
                     if let Some(media) = &mut self.media {
+                        let conn = if sharing { &mut media.share_conn } else { &mut media.watch_conn };
                         if kind == "STREAM_CREATE" {
-                            media.stream_server =
-                                data["rtc_server_id"].as_str().and_then(|s| id(s).ok());
-                            media.stream_channel =
-                                data["rtc_channel_id"].as_str().and_then(|s| id(s).ok());
+                            conn.server = data["rtc_server_id"].as_str().and_then(|s| id(s).ok());
+                            conn.channel = data["rtc_channel_id"].as_str().and_then(|s| id(s).ok());
                         } else {
-                            media.stream_token =
-                                data["token"].as_str().map(|s| Zeroizing::new(s.into()));
-                            media.stream_endpoint = data["endpoint"].as_str().map(str::to_owned);
+                            conn.token = data["token"].as_str().map(|s| Zeroizing::new(s.into()));
+                            conn.endpoint = data["endpoint"].as_str().map(str::to_owned);
                         }
                     }
                     self.start_stream();
@@ -573,10 +597,8 @@ impl Calls {
             screen_video: None,
             screen_task: None,
             watch_task: None,
-            stream_server: None,
-            stream_channel: None,
-            stream_token: None,
-            stream_endpoint: None,
+            share_conn: StreamConn::default(),
+            watch_conn: StreamConn::default(),
         });
         if let Some(media)=&self.media {
             let weak=Arc::downgrade(&media.audio);let stop=media.ptt_stop.clone();let config=self.ptt.clone();let bits=self.control_bits.clone();
@@ -687,17 +709,15 @@ impl Calls {
             if let Some(task) = media.screen_task.take() {
                 task.abort();
             }
-            media.stream_server = None;
-            media.stream_channel = None;
-            media.stream_token = None;
-            media.stream_endpoint = None;
+            media.share_conn = StreamConn::default();
         }
         self.stream_key = None;
+        self.own_preview = None;
+        self.view_own = false;
+        self.upload_due = None;
+        self.upload = None;
     }
     fn start_share(&mut self) -> Result<Value, &'static str> {
-        if self.watch_key.is_some() {
-            return Err("Stop watching the other stream before sharing your screen.");
-        }
         let source = self
             .sources
             .get(self.source)
@@ -718,49 +738,35 @@ impl Calls {
         )?;
         media.screen = Some(worker);
         media.screen_video = Some(video);
-        media.stream_server = None;
-        media.stream_channel = None;
-        media.stream_token = None;
-        media.stream_endpoint = None;
+        media.share_conn = StreamConn::default();
         let channel = self.channel.as_ref().ok_or("Call ended")?;
         let user = self.user.as_ref().ok_or("Call ended")?;
         self.stream_key = Some(stream_key(channel, &user.id));
+        self.upload_due = Some(Instant::now() + Duration::from_secs(3));
         Ok(
             json!({"op":18,"d":{"type":if channel.guild_id.is_some(){"guild"}else{"call"},"guild_id":channel.guild_id,"channel_id":channel.id,"preferred_region":null}}),
         )
     }
     fn start_stream(&mut self) {
-        let remote_sink = self.valid_sink();
         let Some(media) = &mut self.media else { return };
-        let (Some(server), Some(channel), Some(token), Some(endpoint), Some(session), Some(user)) = (
-            media.stream_server,
-            media.stream_channel,
-            media.stream_token.as_ref(),
-            media.stream_endpoint.as_ref(),
-            self.session_id.as_ref(),
-            self.user.as_ref(),
-        ) else {
-            return;
-        };
-        let Ok(credentials) = (|| {
-            Ok::<_, &'static str>(VoiceConnection {
+        let (Some(session), Some(user)) = (self.session_id.as_ref(), self.user.as_ref()) else { return };
+        let credentials = |conn: &StreamConn| -> Option<VoiceConnection> {
+            let (Some(server), Some(channel), Some(token), Some(endpoint)) = (conn.server, conn.channel, conn.token.as_ref(), conn.endpoint.as_ref()) else { return None };
+            Some(VoiceConnection {
                 channel,
                 guild: Some(server),
-                user: id(&user.id)?,
+                user: id(&user.id).ok()?,
                 peer: None,
-                session: Secret::new(session.to_string())?,
-                token: Secret::new(token.to_string())?,
+                session: Secret::new(session.to_string()).ok()?,
+                token: Secret::new(token.to_string()).ok()?,
                 endpoint: endpoint.clone(),
                 request: 1,
             })
-        })() else {
-            return;
         };
-        let identity = media.identity.clone();
-        let tx = self.tx.clone();
-        let ctx = self.ctx.clone();
-        let epoch = self.epoch;
-        if let Some(video) = media.screen_video.take() {
+        let (tx, ctx, epoch) = (self.tx.clone(), self.ctx.clone(), self.epoch);
+        if let (true, Some(credentials)) = (media.screen_video.is_some(), credentials(&media.share_conn)) {
+            let video = media.screen_video.take().expect("checked above");
+            let (identity, tx, ctx) = (media.identity.clone(), tx.clone(), ctx.clone());
             media.screen_task = Some(media.runtime.spawn(async move {
                 let result = voice::run_stream(credentials, identity, video, move |_| {
                     ctx.request_repaint();
@@ -769,10 +775,10 @@ impl Calls {
                 .await;
                 let _ = tx.try_send((epoch, Notice::StreamEnded(false, result)));
             }));
-        } else if self.watch_key.is_some() && media.watch_task.is_none() {
-            let _ = remote_sink;
+        }
+        if let (true, Some(credentials)) = (self.watch_key.is_some() && media.watch_task.is_none(), credentials(&media.watch_conn)) {
             let sink = stream_sink(self.stream_frame.clone(), self.active_epoch.clone(), self.epoch, self.ctx.clone());
-            let playback = media.stream_playback.clone();
+            let (identity, playback) = (media.identity.clone(), media.stream_playback.clone());
             media.watch_task = Some(media.runtime.spawn(async move {
                 let result =
                     voice::watch_stream(credentials, identity, sink, Some(playback), move |_| {
@@ -856,6 +862,20 @@ impl Calls {
             self.hang_up();
             self.error = Some("Media connection ended. Rejoin to try again.".into());
         }
+        if let Some(image) = self.media.as_ref().and_then(|m| m.screen.as_ref()).and_then(|screen| screen.take_preview()) {
+            // Your stream's preview picture for others, refreshed every minute while you share.
+            if self.prefs.stream_preview && self.upload_due.is_some_and(|due| Instant::now() >= due) {
+                if let Some(key) = self.stream_key.clone() {
+                    if let Some(thumbnail) = preview_jpeg(&image) { self.upload = Some((key, thumbnail)); }
+                }
+                self.upload_due = Some(Instant::now() + Duration::from_secs(60));
+            }
+            let image = egui::ColorImage::from_rgba_unmultiplied([image.width() as usize, image.height() as usize], image.as_raw());
+            match &mut self.own_preview {
+                Some(texture) => texture.set(image, egui::TextureOptions::LINEAR),
+                None => self.own_preview = Some(self.ctx.load_texture("own-stream", image, egui::TextureOptions::LINEAR)),
+            }
+        }
         if let Some(media) = &mut self.media {
             if let Some(error) = media.camera.as_ref().and_then(|c| c.error()) {
                 self.error = Some(error.into());
@@ -910,46 +930,50 @@ impl Calls {
             let tiles_height=(ui.available_height()-110.).max(100.);
             let mut watch=None;let mut stop=false;
             egui::ScrollArea::vertical().id_salt("call-tiles").max_height(tiles_height).show(ui,|ui|{
-                let mut participants:Vec<_>=self.participants.values().cloned().collect();participants.sort_by(|a,b|a.id.cmp(&b.id));
-                if let Some(streamer)=self.watching().map(str::to_owned){
+                let participants=self.in_join_order();
+                let own_view=self.view_own&&self.stream_key.is_some();
+                let focus=if own_view{Some(String::new())}else{self.watching().map(str::to_owned)};
+                if let Some(streamer)=focus{
                     // The watched stream takes the stage, like Discord; everyone else sits in a strip below
                     // unless the stream is expanded.
                     let width=ui.available_width();
                     let height=if self.expanded{(tiles_height-44.).max(160.)}else{(width*0.5625).min(tiles_height-150.).max(160.)};
                     let (rect,response)=ui.allocate_exact_size(Vec2::new(width,height),egui::Sense::click());
                     ui.painter().rect_filled(rect,8,egui::Color32::BLACK);
-                    if let Some(texture)=&self.stream_texture{
+                    if let Some(texture)=if own_view{&self.own_preview}else{&self.stream_texture}{
                         let size=texture.size_vec2();let scale=(rect.width()/size.x.max(1.)).min(rect.height()/size.y.max(1.));
                         egui::Image::new(texture).corner_radius(8).paint_at(ui,egui::Rect::from_center_size(rect.center(),size*scale));
                     }else{
-                        ui.painter().text(rect.center(),egui::Align2::CENTER_CENTER,"Connecting to stream…",egui::FontId::proportional(15.),egui::Color32::GRAY);
+                        ui.painter().text(rect.center(),egui::Align2::CENTER_CENTER,if own_view{"Starting your stream…"}else{"Connecting to stream…"},egui::FontId::proportional(15.),egui::Color32::GRAY);
                     }
-                    let name=self.participants.get(&streamer).map(|u|u.name().to_owned()).unwrap_or_default();
+                    let name=if own_view{"Your stream · preview".to_owned()}else{self.participants.get(&streamer).map(|u|u.name().to_owned()).unwrap_or_default()};
                     live_badge(ui,rect.left_top()+Vec2::new(12.,12.));
                     if response.double_clicked(){self.toggle_fullscreen();}
                     if ui.rect_contains_pointer(rect){
                         ui.painter().text(rect.left_bottom()+Vec2::new(12.,-12.),egui::Align2::LEFT_BOTTOM,name,egui::FontId::proportional(14.),egui::Color32::WHITE);
                         let button=egui::Rect::from_min_size(egui::pos2(rect.right()-128.,rect.top()+10.),Vec2::new(116.,30.));
-                        if overlay_button(ui,button,egui::Id::new("stop-watching"),"Stop Watching",egui::Color32::from_rgb(218,55,60)){stop=true;}
+                        if own_view{if overlay_button(ui,button,egui::Id::new("close-own-preview"),"Close Preview",egui::Color32::from_gray(70)){self.view_own=false;}}
+                        else if overlay_button(ui,button,egui::Id::new("stop-watching"),"Stop Watching",egui::Color32::from_rgb(218,55,60)){stop=true;}
                         let full=egui::Rect::from_min_size(rect.right_bottom()-Vec2::new(46.,46.),Vec2::splat(34.));
                         if icon_button(ui,full,egui::Id::new("stream-fullscreen"),if self.fullscreen{"Exit full screen"}else{"Full screen"},|p,c,s|{for (dx,dy) in [(-1.,-1.),(1.,-1.),(-1.,1.),(1.,1.)]{let corner=c+Vec2::new(dx*8.,dy*8.);p.line_segment([corner,corner-Vec2::new(dx*5.,0.)],s);p.line_segment([corner,corner-Vec2::new(0.,dy*5.)],s);}}){self.toggle_fullscreen();}
                         let grow=egui::Rect::from_min_size(full.min-Vec2::new(42.,0.),Vec2::splat(34.));
                         let expanded=self.expanded;
                         if icon_button(ui,grow,egui::Id::new("stream-expand"),if expanded{"Show participants"}else{"Enlarge stream"},|p,c,s|{let r=egui::Rect::from_center_size(c,Vec2::new(18.,12.));p.rect_stroke(r,2,s,egui::StrokeKind::Middle);if expanded{p.line_segment([r.left_bottom()+Vec2::new(0.,4.),r.right_bottom()+Vec2::new(0.,4.)],s);}}){self.expanded=!self.expanded;}
                     }
-                    ui.horizontal(|ui|{let max=if self.prefs.volume_booster{1000}else{200};if ui.add(egui::Slider::new(&mut self.stream_volume,0..=max).text("Stream volume %")).changed(){self.apply_controls();}});
+                    if !own_view{ui.horizontal(|ui|{let max=if self.prefs.volume_booster{1000}else{200};if ui.add(egui::Slider::new(&mut self.stream_volume,0..=max).text("Stream volume %")).changed(){self.apply_controls();}});}
                     ui.add_space(8.);
-                    if !self.expanded{ui.horizontal_wrapped(|ui|{for user in &participants{let (rect,_)=ui.allocate_exact_size(Vec2::new(160.,90.),egui::Sense::hover());if self.tile(ui,images,user,rect,true){watch=Some(user.id.clone());}}});}
+                    if !self.expanded{centered_rows(ui,participants.len(),Vec2::new(160.,90.),10.,|ui,index,rect|{if self.tile(ui,images,&participants[index],rect,true){watch=Some(participants[index].id.clone());}});}
                 }else{
+                    // Two tiles per row at most (one alone fills half the width), every row centered.
                     let width=((ui.available_width()-12.)/2.).max(150.);
-                    for row in participants.chunks(2){ui.horizontal_top(|ui|{for user in row {
-                        let (rect,_)=ui.allocate_exact_size(Vec2::new(width,(width*0.5625).clamp(120.,280.)),egui::Sense::hover());
-                        if self.tile(ui,images,user,rect,false){watch=Some(user.id.clone());}
-                    }});ui.add_space(12.);}
+                    centered_rows(ui,participants.len(),Vec2::new(width,(width*0.5625).clamp(120.,280.)),12.,|ui,index,rect|{if self.tile(ui,images,&participants[index],rect,false){watch=Some(participants[index].id.clone());}});
                 }
             });
             if stop{self.stop_watching();}
-            if let Some(user)=watch{if let Err(error)=self.watch(&user){self.error=Some(error.into());}}
+            if let Some(user)=watch{
+                if self.user.as_ref().is_some_and(|u|u.id==user){self.view_own=true;}
+                else{self.view_own=false;if let Err(error)=self.watch(&user){self.error=Some(error.into());}}
+            }
             ui.add_space((ui.available_height()-96.).max(8.));
             ui.horizontal(|ui|{
                 ui.add_space(((ui.available_width()-320.)/2.).max(0.));
@@ -992,14 +1016,28 @@ impl Calls {
             });
         if back{self.chat=false;}
     }
+    /// Everyone in the call, oldest first: newcomers join on the right and leavers close the gap.
+    fn in_join_order(&mut self)->Vec<User>{
+        self.join_order.retain(|id|self.participants.contains_key(id));
+        let mut new:Vec<_>=self.participants.keys().filter(|id|!self.join_order.contains(id)).cloned().collect();
+        new.sort();
+        self.join_order.extend(new);
+        self.join_order.iter().filter_map(|id|self.participants.get(id).cloned()).collect()
+    }
     /// One participant tile: camera or avatar, name, speaking outline, and for someone who is live,
     /// a LIVE badge and a Watch Stream button. Returns true when Watch Stream was clicked.
     fn tile(&mut self,ui:&mut egui::Ui,images:&mut crate::assets::Images,user:&User,rect:egui::Rect,small:bool)->bool{
         let id=user.id.parse::<u64>().unwrap_or(0);
-        let live=self.is_streaming(&user.id)&&self.watching()!=Some(user.id.as_str());
+        let own=self.user.as_ref().is_some_and(|u|u.id==user.id);
+        let own_live=own&&self.stream_key.is_some();
+        let live=(self.is_streaming(&user.id)&&self.watching()!=Some(user.id.as_str()))||(own_live&&!self.view_own);
         ui.painter().rect_filled(rect,8,egui::Color32::from_gray(39));
-        let camera=self.textures.get(&id).filter(|_|self.watching()!=Some(user.id.as_str()));
-        if let Some(texture)=camera{egui::Image::new(texture).corner_radius(8).paint_at(ui,rect);}else{
+        let camera=if own_live{self.own_preview.as_ref()}else{self.textures.get(&id).filter(|_|self.watching()!=Some(user.id.as_str()))};
+        let preview=(!own&&live).then(||self.previews.get(&user.id)).flatten().and_then(|url|images.texture(url,rect,ui.ctx()).map(|texture|(texture,images.dimensions(url,rect.size(),ui.ctx()))));
+        if let Some((texture,size))=preview{
+            egui::Image::new((texture,rect.size())).uv(crate::identity::cover_uv(size.unwrap_or(rect.size()),rect.size())).corner_radius(8).paint_at(ui,rect);
+            ui.painter().rect_filled(rect,8,egui::Color32::from_black_alpha(80));
+        }else if let Some(texture)=camera{egui::Image::new(texture).corner_radius(8).paint_at(ui,rect);}else{
             let radius=if small{24.}else{38.};
             let avatar=egui::Rect::from_center_size(rect.center()-Vec2::new(0.,if live&&!small{18.}else{0.}),Vec2::splat(radius*2.));ui.painter().circle_filled(avatar.center(),radius,egui::Color32::from_gray(65));
             if let Some(texture)=crate::assets::avatar_url(user,None,None).and_then(|url|images.texture(&url,avatar,ui.ctx())){egui::Image::new((texture,avatar.size())).corner_radius(radius).paint_at(ui,avatar);}else{ui.painter().text(avatar.center(),egui::Align2::CENTER_CENTER,user.name().chars().take(2).collect::<String>(),egui::FontId::proportional(radius*0.7),egui::Color32::WHITE);}
@@ -1009,9 +1047,9 @@ impl Calls {
         ui.painter().text(rect.left_bottom()+Vec2::new(10.,-10.),egui::Align2::LEFT_BOTTOM,user.name(),egui::FontId::proportional(if small{12.}else{14.}),egui::Color32::WHITE);
         if !live{return false;}
         live_badge(ui,rect.left_top()+Vec2::new(10.,10.));
-        let size=if small{Vec2::new(96.,24.)}else{Vec2::new(118.,28.)};
+        let size=if own{if small{Vec2::new(128.,24.)}else{Vec2::new(150.,28.)}}else if small{Vec2::new(96.,24.)}else{Vec2::new(118.,28.)};
         let button=egui::Rect::from_center_size(if small{rect.center()}else{rect.center()+Vec2::new(0.,36.)},size);
-        watch_pill(ui,button,egui::Id::new(("watch-stream",&user.id)))
+        watch_pill(ui,button,egui::Id::new(("watch-stream",&user.id)),if own{"View Your Stream"}else{"Watch Stream"})
     }
     /// Offline preview screenshots: one peer is live, or the share picker is open.
     pub fn preview_live(&mut self,watching:bool){if let (Some(channel),Some(peer))=(self.channel.clone(),self.participants.keys().find(|id|Some(*id)!=self.user.as_ref().map(|u|&u.id)).cloned()){let key=stream_key(&channel,&peer);self.streams.push((key.clone(),peer));if watching{self.watch_key=Some(key);
@@ -1099,6 +1137,7 @@ impl Calls {
                 for fps in [15,30,60]{if ui.selectable_label(self.prefs.screen_fps==fps,format!("{fps} FPS")).clicked(){self.prefs.screen_fps=fps;}}
             });
             ui.checkbox(&mut self.share_audio,"Share sound (other apps, not Eclipse)");
+            ui.checkbox(&mut self.prefs.stream_preview,"Show a preview of my stream").on_hover_text("Uploads a small picture of your stream to Discord every minute, so people can see what you're sharing before they watch.");
             ui.add_space(12.);
             ui.horizontal(|ui|{
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
@@ -1176,6 +1215,10 @@ impl Calls {
         if self.user.as_ref().is_some_and(|u|u.id==user){return self.self_speaking();}
         self.ready&&user.parse::<u64>().is_ok_and(|id|self.speaking.contains(&id))
     }
+    /// A preview picture of your stream ready to send to Discord: (stream key, data URL).
+    pub fn take_preview_upload(&mut self)->Option<(String,String)>{self.upload.take()}
+    /// Choices made in the Screen Share dialog, so the app can remember them.
+    pub fn share_choices(&self)->(u32,u32,bool){(self.prefs.screen_height,self.prefs.screen_fps,self.prefs.stream_preview)}
     pub fn is_streaming(&self,user:&str)->bool{self.streams.iter().any(|(_,id)|id==user)}
     pub fn watching(&self)->Option<&str>{let key=self.watch_key.as_deref()?;self.streams.iter().find(|(k,_)|k==key).map(|(_,id)|id.as_str())}
     /// Watch Stream from outside the call: starts once the call has connected.
@@ -1183,12 +1226,11 @@ impl Calls {
     /// Starts watching someone's screen share in this call, replacing any stream being watched.
     pub fn watch(&mut self,user:&str)->Result<(),&'static str>{
         let key=self.streams.iter().find(|(_,id)|id==user).map(|(key,_)|key.clone()).ok_or("They are no longer streaming.")?;
-        if self.stream_key.is_some(){return Err("Stop sharing your screen before watching a stream.");}
         if !self.ready||self.media.is_none(){self.pending_watch=Some(user.to_owned());return Ok(());}
         self.pending_watch=None;self.chat=false;
         if self.watch_key.as_deref()==Some(key.as_str()){return Ok(());}
         self.stop_watching();
-        if let Some(media)=&mut self.media{media.stream_server=None;media.stream_channel=None;media.stream_token=None;media.stream_endpoint=None;}
+        if let Some(media)=&mut self.media{media.watch_conn=StreamConn::default();}
         self.watch_key=Some(key.clone());
         self.outbound.push(json!({"op":20,"d":{"stream_key":key}}));
         Ok(())
@@ -1224,11 +1266,11 @@ fn hotkey_open(config:u64,down:impl Fn(i32)->bool)->bool{
     down((config&255)as i32)&&((config&(1<<8)==0)||down(0x11))&&((config&(1<<9)==0)||down(0x10))&&((config&(1<<10)==0)||down(0x12))
 }
 /// Discord-style Watch Stream pill: a rounded blurple button with a small screen glyph.
-pub fn watch_pill(ui:&egui::Ui,rect:egui::Rect,id:egui::Id)->bool{
+pub fn watch_pill(ui:&egui::Ui,rect:egui::Rect,id:egui::Id,label:&str)->bool{
     let response=ui.interact(rect,id,egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
     let fill=if response.hovered(){egui::Color32::from_rgb(71,82,196)}else{egui::Color32::from_rgb(88,101,242)};
     ui.painter().rect_filled(rect,rect.height()/2.,fill);
-    let text=ui.painter().layout_no_wrap("Watch Stream".into(),egui::FontId::proportional((rect.height()*0.45).clamp(10.,13.)),egui::Color32::WHITE);
+    let text=ui.painter().layout_no_wrap(label.into(),egui::FontId::proportional((rect.height()*0.45).clamp(10.,13.)),egui::Color32::WHITE);
     let glyph=Vec2::new(11.,8.);let total=glyph.x+5.+text.size().x;
     let left=rect.center().x-total/2.;
     let screen=egui::Rect::from_min_size(egui::pos2(left,rect.center().y-glyph.y/2.-1.),glyph);
@@ -1268,13 +1310,42 @@ fn stream_sink(latest:Arc<Mutex<Option<egui::ColorImage>>>,active:Arc<AtomicU64>
         repaint.request_repaint();
     })
 }
+/// A small JPEG data URL of a stream picture, the form Discord takes for stream previews.
+fn preview_jpeg(image:&image::RgbaImage)->Option<String>{
+    use base64::{engine::general_purpose::STANDARD,Engine};
+    let small=image::DynamicImage::ImageRgba8(image.clone()).thumbnail(512,288).to_rgb8();
+    let mut bytes=std::io::Cursor::new(Vec::new());
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes,75).encode_image(&small).ok()?;
+    Some(format!("data:image/jpeg;base64,{}",STANDARD.encode(bytes.into_inner())))
+}
+/// Lays out `count` tiles of one size in as many full rows as fit, each row centered, and
+/// calls `tile` with each tile's index and place.
+fn centered_rows(ui:&mut egui::Ui,count:usize,size:Vec2,gap:f32,mut tile:impl FnMut(&mut egui::Ui,usize,egui::Rect)){
+    let width=ui.available_width();
+    let per_row=(((width+gap)/(size.x+gap)).floor() as usize).max(1);
+    let mut index=0;
+    while index<count{
+        let in_row=per_row.min(count-index);
+        let row_width=in_row as f32*size.x+(in_row-1) as f32*gap;
+        ui.horizontal(|ui|{
+            ui.spacing_mut().item_spacing.x=gap;
+            ui.add_space(((width-row_width)/2.).max(0.));
+            for i in index..index+in_row{
+                let (rect,_)=ui.allocate_exact_size(size,egui::Sense::hover());
+                tile(ui,i,rect);
+            }
+        });
+        ui.add_space(gap);
+        index+=in_row;
+    }
+}
 /// Discord's red LIVE pill.
 fn live_badge(ui:&egui::Ui,at:egui::Pos2){
     let galley=ui.painter().layout_no_wrap("LIVE".into(),egui::FontId::proportional(11.),egui::Color32::WHITE);
     let rect=egui::Rect::from_min_size(at,galley.size()+Vec2::new(10.,4.));
     ui.painter().rect_filled(rect,4,egui::Color32::from_rgb(218,55,60));ui.painter().galley(rect.center()-galley.size()/2.,galley,egui::Color32::WHITE);
 }
-fn stream_key(channel: &Channel, user: &str) -> String {
+pub fn stream_key(channel: &Channel, user: &str) -> String {
     match &channel.guild_id {
         Some(guild) => format!("guild:{guild}:{}:{user}", channel.id),
         None => format!("call:{}:{user}", channel.id),
@@ -1401,6 +1472,23 @@ mod tests {
         assert_eq!(calls.watch_key.as_deref(),Some(key.as_str()),"the reply to leaving does not cancel watching again");
         calls.signal("STREAM_DELETE",&json!({"stream_key":key}));
         assert!(calls.watch_key.is_none(),"a real end of the stream still stops it");
+    }
+    #[test]
+    fn stream_preview_pictures_are_small_jpeg_data_urls(){
+        let image=image::RgbaImage::from_pixel(960,540,image::Rgba([10,200,30,255]));
+        let url=preview_jpeg(&image).unwrap();
+        assert!(url.starts_with("data:image/jpeg;base64,")&&url.len()<64*1024,"{} bytes",url.len());
+    }
+    #[test]
+    fn newcomers_appear_on_the_right_and_leavers_close_the_gap(){
+        let mut calls=Calls::new(egui::Context::default());
+        let person=|id:&str|User{id:id.into(),username:id.into(),..Default::default()};
+        for id in ["30","10"]{calls.participants.insert(id.into(),person(id));}
+        assert_eq!(calls.in_join_order().iter().map(|u|u.id.as_str()).collect::<Vec<_>>(),["10","30"]);
+        calls.participants.insert("20".into(),person("20"));
+        assert_eq!(calls.in_join_order().iter().map(|u|u.id.as_str()).collect::<Vec<_>>(),["10","30","20"],"a newcomer goes on the right, not by id");
+        calls.participants.remove("30");
+        assert_eq!(calls.in_join_order().iter().map(|u|u.id.as_str()).collect::<Vec<_>>(),["10","20"]);
     }
     #[test]
     fn friends_show_as_speaking_while_the_voice_server_reports_them(){

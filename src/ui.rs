@@ -150,6 +150,8 @@ pub struct Eclipse {
     mention_pick: usize,
     mention_ids: HashMap<String, String>,
     mention_query: String,
+    /// When each stream preview picture was last asked for, by stream key.
+    stream_preview_fetched: HashMap<String, Instant>,
     /// Put the cursor in the message box next frame (after Reply).
     focus_message_box: bool,
     updater: crate::updater::Updater,
@@ -265,7 +267,7 @@ impl Eclipse {
             picker: Default::default(),
             calls: crate::calls::Calls::new(ctx.clone()),
             applied_prefs:prefs.clone(),prefs,prefs_save_at:None,home:Home::Chat,
-            settings_page:"Account & Profile".into(),settings_search:String::new(),server_settings:false,server_page:"Overview".into(),server:Default::default(),features:HashMap::new(),feature_errors:HashMap::new(),feature_pending:HashSet::new(),account_edit:serde_json::Value::Null,settings_edit:serde_json::Value::Null,server_edit:serde_json::Value::Null,role_edit:None,profile:None,friends:vec![],friend_filter:"Online".into(),friend_search:String::new(),friend_add:String::new(),member_search:String::new(),reply:None,logs:VecDeque::new(),profile_anchor:None,profile_guild:None,profile_just_opened:false,voice_revealed:None,shop_filter:"All".into(),quest_filter:"Discover".into(),spotify:None,game_activity:true,read_latest:HashMap::new(),confirm:None,hotkey_record:None,audio_devices:None,last_typing:None,composer_ime:false,mention_open:false,mention_pick:0,mention_ids:HashMap::new(),mention_query:String::new(),focus_message_box:false,updater:Default::default(),
+            settings_page:"Account & Profile".into(),settings_search:String::new(),server_settings:false,server_page:"Overview".into(),server:Default::default(),features:HashMap::new(),feature_errors:HashMap::new(),feature_pending:HashSet::new(),account_edit:serde_json::Value::Null,settings_edit:serde_json::Value::Null,server_edit:serde_json::Value::Null,role_edit:None,profile:None,friends:vec![],friend_filter:"Online".into(),friend_search:String::new(),friend_add:String::new(),member_search:String::new(),reply:None,logs:VecDeque::new(),profile_anchor:None,profile_guild:None,profile_just_opened:false,voice_revealed:None,shop_filter:"All".into(),quest_filter:"Discover".into(),spotify:None,game_activity:true,read_latest:HashMap::new(),confirm:None,hotkey_record:None,audio_devices:None,last_typing:None,composer_ime:false,mention_open:false,mention_pick:0,mention_ids:HashMap::new(),mention_query:String::new(),stream_preview_fetched:HashMap::new(),focus_message_box:false,updater:Default::default(),
         };
         app.calls.configure(&app.prefs);
         app.images.playback_options(app.prefs.animations&&!app.prefs.reduced_motion,app.prefs.animation_fps);
@@ -2162,6 +2164,14 @@ impl eframe::App for Eclipse {
         }
         for command in self.calls.show(ctx, &mut self.images) {
             self.send_gateway(command);
+        }
+        // Remember Screen Share dialog choices, and send your stream's preview picture.
+        let (height, fps, preview) = self.calls.share_choices();
+        if (self.prefs.screen_height, self.prefs.screen_fps, self.prefs.stream_preview) != (height, fps, preview) {
+            (self.prefs.screen_height, self.prefs.screen_fps, self.prefs.stream_preview) = (height, fps, preview);
+        }
+        if let Some((key, thumbnail)) = self.calls.take_preview_upload() {
+            self.mutate("stream-preview-upload", reqwest::Method::POST, format!("/streams/{key}/preview"), Some(serde_json::json!({"thumbnail": thumbnail})));
         }
         if let Some(channel) = self.incoming_call.clone() {
             egui::Window::new("Incoming Discord call")

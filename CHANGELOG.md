@@ -1,3 +1,10 @@
+# Unreleased
+
+- Share your screen while watching someone else's stream (no more "Stop watching" call error).
+- Watch your own stream: your call tile shows what you're sharing (960x540, 30 fps) with View Your Stream to see it large, full screen or enlarged.
+- Stream preview pictures: live friends' call tiles show a preview of their stream behind Watch Stream, and hovering a live friend under a voice channel shows it too; previews refresh every minute. Your own stream uploads a preview every minute, which you can turn off with "Show a preview of my stream" in the Screen Share dialog. The dialog also remembers your resolution and frame rate.
+- Call tiles are centered and kept in join order: newcomers appear on the right and the row re-centers when someone leaves.
+
 # Eclipse 0.8.4 — October 9, 2026
 
 - Fixed a stream getting stuck on "Connecting to stream…" when watched again after stopping: Eclipse now tells Discord it left the stream.

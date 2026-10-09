@@ -13,12 +13,13 @@ pub struct Preferences {
     pub spotify:bool,pub volume_booster:bool,pub silent_typing:bool,pub read_all:bool,pub message_logger:bool,pub click_actions:bool,pub activity_toggle:bool,
     pub input:Option<String>,pub output:Option<String>,pub input_gain:u16,pub output_gain:u16,
     pub processing:voice_model::voice_settings::VoiceProcessing,
-    pub push_to_talk:bool,pub ptt_key:u32,pub ptt_ctrl:bool,pub ptt_shift:bool,pub ptt_alt:bool,pub screen_height:u32,pub screen_fps:u32,
+    /// Upload a preview picture of your screen share for others (Screen Share dialog).
+    pub stream_preview:bool,pub push_to_talk:bool,pub ptt_key:u32,pub ptt_ctrl:bool,pub ptt_shift:bool,pub ptt_alt:bool,pub screen_height:u32,pub screen_fps:u32,
     pub theme:Theme,pub aliases:HashMap<String,String>,pub plugins:Vec<Plugin>,
     /// Height the pinned-messages dropdown was last dragged to.
     pub pins_height:f32,
 }
-impl Default for Preferences {fn default()->Self{Self{pins_height:360.0,media_revision:1,ui_sounds:true,compact:false,members:true,animations:true,images:true,developer:false,zoom:1.0,font_size:15.0,animation_fps:60,idle_seconds:2,show_usernames:false,character_count:true,role_colors:true,member_count:true,quiet_mentions:false,reduced_motion:false,contrast:false,streamer:false,spotify:true,volume_booster:true,silent_typing:true,read_all:true,message_logger:true,click_actions:true,activity_toggle:true,input:None,output:None,input_gain:100,output_gain:100,processing:Default::default(),push_to_talk:false,ptt_key:119,ptt_ctrl:false,ptt_shift:false,ptt_alt:false,screen_height:720,screen_fps:30,theme:Theme::default(),aliases:HashMap::new(),plugins:vec![]}}}
+impl Default for Preferences {fn default()->Self{Self{pins_height:360.0,media_revision:1,ui_sounds:true,compact:false,members:true,animations:true,images:true,developer:false,zoom:1.0,font_size:15.0,animation_fps:60,idle_seconds:2,show_usernames:false,character_count:true,role_colors:true,member_count:true,quiet_mentions:false,reduced_motion:false,contrast:false,streamer:false,spotify:true,volume_booster:true,silent_typing:true,read_all:true,message_logger:true,click_actions:true,activity_toggle:true,input:None,output:None,input_gain:100,output_gain:100,processing:Default::default(),stream_preview:true,push_to_talk:false,ptt_key:119,ptt_ctrl:false,ptt_shift:false,ptt_alt:false,screen_height:720,screen_fps:30,theme:Theme::default(),aliases:HashMap::new(),plugins:vec![]}}}
 #[derive(Clone,Serialize,Deserialize,PartialEq)]
 #[serde(default)]pub struct Theme{pub name:String,pub background:String,pub surface:String,pub accent:String,pub text:String}
 impl Default for Theme{fn default()->Self{Self{name:"Material Black".into(),background:"#0b0b0b".into(),surface:"#171717".into(),accent:"#b8b8b8".into(),text:"#ededed".into()}}}

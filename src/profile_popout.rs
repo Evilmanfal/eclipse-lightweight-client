@@ -102,8 +102,24 @@ impl Eclipse {
     /// Gives the call screen the same people the sidebar lists under the call's voice channel.
     pub(in crate::ui) fn sync_call_roster(&mut self){
         let Some(channel)=self.calls.channel().cloned() else{return};
-        let users=self.voice.in_channel(&channel.id).iter().map(|state|(self.voice_identity(state).0,state.streaming)).collect();
+        let states=self.voice.in_channel(&channel.id);
+        let users=states.iter().map(|state|(self.voice_identity(state).0,state.streaming)).collect();
         self.calls.sync_roster(users);
+        let me=self.user.as_ref().map(|u|u.id.clone()).unwrap_or_default();
+        let previews=states.iter().filter(|s|s.streaming&&s.user_id!=me).filter_map(|s|self.stream_preview(&channel,&s.user_id).map(|url|(s.user_id.clone(),url))).collect();
+        self.calls.previews=previews;
+    }
+    /// The current preview picture of someone's stream, asked for again at most once a minute.
+    pub(in crate::ui) fn stream_preview(&mut self,channel:&Channel,user:&str)->Option<String>{
+        if self.preview{return None;}
+        let key=crate::calls::stream_key(channel,user);
+        let feature=format!("stream-preview:{key}");
+        if self.stream_preview_fetched.get(&key).is_none_or(|at|at.elapsed()>=Duration::from_secs(60)){
+            if self.stream_preview_fetched.len()>256{self.stream_preview_fetched.clear();}
+            self.stream_preview_fetched.insert(key.clone(),Instant::now());
+            self.request_feature(&feature,format!("/streams/{key}/preview"));
+        }
+        self.features.get(&feature).and_then(|v|v["url"].as_str()).filter(|url|assets::public_url(url)).map(str::to_owned)
     }
     /// Watch Stream from the sidebar or a call tile: joins the voice channel first if needed.
     pub(in crate::ui) fn watch_stream(&mut self,channel:&Channel,user:&str){
@@ -125,7 +141,7 @@ impl Eclipse {
         if in_call&&!states.iter().any(|s|s.user_id==me){states.insert(0,crate::voice_roster::VoiceState{user_id:me.clone(),guild_id:channel.guild_id.clone(),channel_id:channel.id.clone(),..Default::default()});}
         if states.is_empty(){return;}
         let mut missing=vec![];
-        let mut watch=None;
+        let mut watch=None;let mut hovered_live=None;
         for state in states.iter().take(99){
             let (user,name)=self.voice_identity(state);
             if user.username.is_empty(){missing.push(state.user_id.clone());}
@@ -135,6 +151,7 @@ impl Eclipse {
             // Hovering someone who is live offers Watch Stream, like Discord.
             let row=egui::Rect::from_min_size(ui.cursor().min,Vec2::new(ui.available_width(),22.));
             let offer=state.streaming&&!own&&ui.rect_contains_pointer(row)&&!(in_call&&self.calls.watching()==Some(state.user_id.as_str()));
+            if offer{hovered_live=Some((state.user_id.clone(),row));}
             let (muted,deafened)=if own{(self.calls.muted(),self.calls.deafened())}else{(state.muted,state.deafened)};
             ui.horizontal(|ui|{
                 ui.spacing_mut().item_spacing.x=6.;ui.add_space(26.);
@@ -156,7 +173,7 @@ impl Eclipse {
                     if state.video{bar_control(ui,Control::Camera,false,18.,"Camera on");}
                     if offer{
                         let (rect,_)=ui.allocate_exact_size(Vec2::new(84.,18.),egui::Sense::hover());
-                        if crate::calls::watch_pill(ui,rect,egui::Id::new(("sidebar-watch",&state.user_id))){watch=Some(state.user_id.clone());}
+                        if crate::calls::watch_pill(ui,rect,egui::Id::new(("sidebar-watch",&state.user_id)),"Watch Stream"){watch=Some(state.user_id.clone());}
                     }else if state.streaming{
                         let galley=ui.painter().layout_no_wrap("LIVE".into(),egui::FontId::proportional(9.),Color32::WHITE);
                         let (rect,response)=ui.allocate_exact_size(galley.size()+Vec2::new(8.,4.),egui::Sense::hover());
@@ -167,6 +184,21 @@ impl Eclipse {
             });
         }
         if let Some(user)=watch{self.watch_stream(channel,&user);}
+        if let Some((user,row))=hovered_live{
+            if let Some(url)=self.stream_preview(channel,&user){
+                let size=Vec2::new(256.,144.);
+                egui::Area::new(egui::Id::new("stream-preview-popup")).order(egui::Order::Tooltip).interactable(false).fixed_pos(row.right_top()+Vec2::new(14.,-60.)).show(ui.ctx(),|ui|{
+                    egui::Frame::NONE.fill(CARD).stroke(Stroke::new(1.0_f32,BORDER)).corner_radius(8).inner_margin(6).show(ui,|ui|{
+                        let (rect,_)=ui.allocate_exact_size(size,egui::Sense::hover());
+                        ui.painter().rect_filled(rect,6,Color32::BLACK);
+                        if let Some(texture)=self.images.texture(&url,rect,ui.ctx()){
+                            let image=self.images.dimensions(&url,rect.size(),ui.ctx()).unwrap_or(rect.size());
+                            egui::Image::new((texture,rect.size())).uv(crate::identity::cover_uv(image,rect.size())).corner_radius(6).paint_at(ui,rect);
+                        }else{ui.painter().text(rect.center(),egui::Align2::CENTER_CENTER,"Loading preview…",egui::FontId::proportional(12.),MUTED);}
+                    });
+                });
+            }
+        }
         if let Some(guild)=channel.guild_id.clone().filter(|_|!self.preview){
             let ids:Vec<String>=missing.into_iter().filter(|id|self.voice_lookups.insert(id.clone())).take(100).collect();
             if !ids.is_empty()&&self.voice_lookups.len()<5000{self.send_gateway(serde_json::json!({"op":8,"d":{"guild_id":guild,"user_ids":ids,"presences":false}}));}

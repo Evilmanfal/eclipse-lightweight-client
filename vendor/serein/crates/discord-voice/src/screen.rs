@@ -240,7 +240,7 @@ impl Worker {
 		self.done.as_ref()?.try_recv().ok()
 	}
 
-	/// One local RGBA image, bounded to 640 by 360 pixels and replaced at most ten times a second.
+	/// One local RGBA image, bounded to 960 by 540 pixels and replaced up to 30 times a second.
 	pub fn take_preview(&self) -> Option<image::RgbaImage> {
 		self.preview.try_lock().ok()?.take()
 	}
@@ -345,7 +345,8 @@ fn encode_loop(
 				if let Ok(mut slot) = preview.try_lock() {
 					*slot = Some(image);
 				}
-				next_preview = now + Duration::from_millis(100);
+				// Eclipse: 30 previews a second so you can watch your own stream smoothly.
+				next_preview = now + Duration::from_millis(33);
 				wake();
 			}
 		}
@@ -692,10 +693,13 @@ fn validate_frame(frame: &RawFrame) -> Result<(usize, usize), &'static str> {
 	Ok((row_bytes, required))
 }
 
+/// Eclipse: the local preview is large enough to watch your own stream (upstream: 640x360).
+const PREVIEW_WIDTH: u32 = 960;
+const PREVIEW_HEIGHT: u32 = 540;
 pub(super) fn preview_frame(frame: &RawFrame) -> Result<image::RgbaImage, &'static str> {
 	validate_frame(frame)?;
-	let scale = (640.0 / f64::from(frame.width))
-		.min(360.0 / f64::from(frame.height))
+	let scale = (f64::from(PREVIEW_WIDTH) / f64::from(frame.width))
+		.min(f64::from(PREVIEW_HEIGHT) / f64::from(frame.height))
 		.min(1.0);
 	let width = (f64::from(frame.width) * scale).round().max(1.0) as u32;
 	let height = (f64::from(frame.height) * scale).round().max(1.0) as u32;
@@ -814,9 +818,9 @@ mod tests {
 				data: vec![0; width as usize * height as usize * 4],
 			};
 			let preview = preview_frame(&frame).unwrap();
-			assert!(preview.width() > 0 && preview.width() <= 640);
-			assert!(preview.height() > 0 && preview.height() <= 360);
-			assert!(preview.as_raw().len() <= 640 * 360 * 4);
+			assert!(preview.width() > 0 && preview.width() <= PREVIEW_WIDTH);
+			assert!(preview.height() > 0 && preview.height() <= PREVIEW_HEIGHT);
+			assert!(preview.as_raw().len() <= (PREVIEW_WIDTH * PREVIEW_HEIGHT * 4) as usize);
 		}
 		assert!(
 			preview_frame(&RawFrame {
