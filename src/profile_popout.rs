@@ -119,7 +119,21 @@ impl Eclipse {
             self.stream_preview_fetched.insert(key.clone(),Instant::now());
             self.request_feature(&feature,format!("/streams/{key}/preview"));
         }
-        self.features.get(&feature).and_then(|v|v["url"].as_str()).filter(|url|assets::public_url(url)).map(str::to_owned)
+        self.stream_preview_status(channel,user).ok()
+    }
+    /// The preview picture link, or why there isn't one (shown in the hover popup).
+    pub(in crate::ui) fn stream_preview_status(&self,channel:&Channel,user:&str)->Result<String,String>{
+        let feature=format!("stream-preview:{}",crate::calls::stream_key(channel,user));
+        if let Some(error)=self.feature_errors.get(&feature){
+            return Err(if error.contains("404")||error.to_lowercase().contains("unknown"){"No preview yet".into()}else{format!("Preview unavailable: {}",error.chars().take(80).collect::<String>())});
+        }
+        let Some(data)=self.features.get(&feature) else{return Err("Loading preview…".into())};
+        let Some(url)=data["url"].as_str() else{return Err("No preview yet".into())};
+        if !assets::public_url(url){
+            let host=reqwest::Url::parse(url).ok().and_then(|u|u.host_str().map(str::to_owned)).unwrap_or_default();
+            return Err(format!("Preview hosted on {host} is not loaded"));
+        }
+        Ok(url.to_owned())
     }
     /// Watch Stream from the sidebar or a call tile: joins the voice channel first if needed.
     pub(in crate::ui) fn watch_stream(&mut self,channel:&Channel,user:&str){
@@ -185,16 +199,31 @@ impl Eclipse {
         }
         if let Some(user)=watch{self.watch_stream(channel,&user);}
         if let Some((user,row))=hovered_live{
-            if let Some(url)=self.stream_preview(channel,&user){
+            let _=self.stream_preview(channel,&user);
+            let status=self.stream_preview_status(channel,&user);
+            {
                 let size=Vec2::new(256.,144.);
                 egui::Area::new(egui::Id::new("stream-preview-popup")).order(egui::Order::Tooltip).interactable(false).fixed_pos(row.right_top()+Vec2::new(14.,-60.)).show(ui.ctx(),|ui|{
                     egui::Frame::NONE.fill(CARD).stroke(Stroke::new(1.0_f32,BORDER)).corner_radius(8).inner_margin(6).show(ui,|ui|{
                         let (rect,_)=ui.allocate_exact_size(size,egui::Sense::hover());
                         ui.painter().rect_filled(rect,6,Color32::BLACK);
-                        if let Some(texture)=self.images.texture(&url,rect,ui.ctx()){
-                            let image=self.images.dimensions(&url,rect.size(),ui.ctx()).unwrap_or(rect.size());
-                            egui::Image::new((texture,rect.size())).uv(crate::identity::cover_uv(image,rect.size())).corner_radius(6).paint_at(ui,rect);
-                        }else{ui.painter().text(rect.center(),egui::Align2::CENTER_CENTER,"Loading preview…",egui::FontId::proportional(12.),MUTED);}
+                        // Always say what is happening, so a missing preview can be explained.
+                        let message=match &status{
+                            Ok(url)=>match self.images.texture(url,rect,ui.ctx()){
+                                Some(texture)=>{
+                                    let image=self.images.dimensions(url,rect.size(),ui.ctx()).unwrap_or(rect.size());
+                                    egui::Image::new((texture,rect.size())).uv(crate::identity::cover_uv(image,rect.size())).corner_radius(6).paint_at(ui,rect);
+                                    None
+                                }
+                                None if self.images.failed(url)=>Some("Preview picture failed to load".to_owned()),
+                                None=>Some("Loading preview…".to_owned()),
+                            },
+                            Err(message)=>Some(message.clone()),
+                        };
+                        if let Some(message)=message{
+                            let text=ui.painter().layout(message,egui::FontId::proportional(12.),MUTED,rect.width()-20.);
+                            ui.painter().galley(rect.center()-text.size()/2.,text,MUTED);
+                        }
                     });
                 });
             }
