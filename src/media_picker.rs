@@ -65,6 +65,8 @@ pub struct Picker {
     pub channel: String,
     pub guild: Option<String>,
     pub emojis: Vec<CustomEmoji>,
+    /// Nitro: emojis from your other servers, by server name, usable anywhere.
+    pub other_servers: Vec<(String, Vec<CustomEmoji>)>,
     pub gifs: Vec<Gif>,
     pub query: String,
     pub requested: String,
@@ -272,6 +274,25 @@ impl Picker {
                                     )
                                     .on_hover_text(&emoji.name)
                                     .clicked()
+                                    {
+                                        picked = Some(emoji.token());
+                                    }
+                                }
+                            });
+                        }
+                        // Nitro: every other server's emojis, a section per server.
+                        let mut shown = 0;
+                        for (server, emojis) in &self.other_servers {
+                            let matching: Vec<_> = emojis.iter().filter(|e| e.available != Some(false) && e.name.to_lowercase().contains(&query)).take(300).collect();
+                            if matching.is_empty() || shown >= 3000 { continue; }
+                            shown += matching.len();
+                            ui.separator();
+                            ui.label(server);
+                            ui.horizontal_wrapped(|ui| {
+                                for emoji in matching {
+                                    if image_button(ui, images, emoji.image(), &emoji.name, Vec2::splat(32.0), false)
+                                        .on_hover_text(format!(":{}: · {server}", emoji.name))
+                                        .clicked()
                                     {
                                         picked = Some(emoji.token());
                                     }

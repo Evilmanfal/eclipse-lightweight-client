@@ -150,6 +150,8 @@ pub struct Eclipse {
     mention_pick: usize,
     mention_ids: HashMap<String, String>,
     mention_query: String,
+    /// Custom emojis of every server you are in, by server id: (server name, emojis).
+    server_emojis: HashMap<String, (String, Vec<crate::media_picker::CustomEmoji>)>,
     /// When each stream preview picture was last asked for, by stream key.
     stream_preview_fetched: HashMap<String, Instant>,
     /// Put the cursor in the message box next frame (after Reply).
@@ -267,7 +269,7 @@ impl Eclipse {
             picker: Default::default(),
             calls: crate::calls::Calls::new(ctx.clone()),
             applied_prefs:prefs.clone(),prefs,prefs_save_at:None,home:Home::Chat,
-            settings_page:"Account & Profile".into(),settings_search:String::new(),server_settings:false,server_page:"Overview".into(),server:Default::default(),features:HashMap::new(),feature_errors:HashMap::new(),feature_pending:HashSet::new(),account_edit:serde_json::Value::Null,settings_edit:serde_json::Value::Null,server_edit:serde_json::Value::Null,role_edit:None,profile:None,friends:vec![],friend_filter:"Online".into(),friend_search:String::new(),friend_add:String::new(),member_search:String::new(),reply:None,logs:VecDeque::new(),profile_anchor:None,profile_guild:None,profile_just_opened:false,voice_revealed:None,shop_filter:"All".into(),quest_filter:"Discover".into(),spotify:None,game_activity:true,read_latest:HashMap::new(),confirm:None,hotkey_record:None,audio_devices:None,last_typing:None,composer_ime:false,mention_open:false,mention_pick:0,mention_ids:HashMap::new(),mention_query:String::new(),stream_preview_fetched:HashMap::new(),focus_message_box:false,updater:Default::default(),
+            settings_page:"Account & Profile".into(),settings_search:String::new(),server_settings:false,server_page:"Overview".into(),server:Default::default(),features:HashMap::new(),feature_errors:HashMap::new(),feature_pending:HashSet::new(),account_edit:serde_json::Value::Null,settings_edit:serde_json::Value::Null,server_edit:serde_json::Value::Null,role_edit:None,profile:None,friends:vec![],friend_filter:"Online".into(),friend_search:String::new(),friend_add:String::new(),member_search:String::new(),reply:None,logs:VecDeque::new(),profile_anchor:None,profile_guild:None,profile_just_opened:false,voice_revealed:None,shop_filter:"All".into(),quest_filter:"Discover".into(),spotify:None,game_activity:true,read_latest:HashMap::new(),confirm:None,hotkey_record:None,audio_devices:None,last_typing:None,composer_ime:false,mention_open:false,mention_pick:0,mention_ids:HashMap::new(),mention_query:String::new(),server_emojis:HashMap::new(),stream_preview_fetched:HashMap::new(),focus_message_box:false,updater:Default::default(),
         };
         app.calls.configure(&app.prefs);
         app.images.playback_options(app.prefs.animations&&!app.prefs.reduced_motion,app.prefs.animation_fps);
@@ -1941,7 +1943,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     for (mode,kind,tooltip) in [(crate::media_picker::Mode::Gif,crate::widgets::Control::Gif,"Choose a GIF"),(crate::media_picker::Mode::Emoji,crate::widgets::Control::Emoji,"Choose an emoji")]{
                         let response=crate::widgets::control(ui,kind,self.picker.mode==Some(mode),30.,tooltip);
                         if self.picker.mode==Some(mode){self.picker.anchor=Some(response.rect);}
-                        if response.clicked(){if let Some(command)=self.picker.open(mode,&channel.id,self.guild.as_deref(),response.rect){if !self.preview{self.send_command(command);}}}
+                        if response.clicked(){if let Some(command)=self.picker.open(mode,&channel.id,self.guild.as_deref(),response.rect){if !self.preview{self.send_command(command);}}self.picker.other_servers=self.nitro_emojis();}
                     }
                     if ui
                         .add_enabled(
@@ -2474,6 +2476,20 @@ mod interaction_tests {
         assert!(!app.channels.iter().any(|c|c.id=="9001"));
         app.account_event("CHANNEL_CREATE",&serde_json::json!({"id":"9002","guild_id":"another-server","type":2,"name":"elsewhere"}));
         assert!(!app.channels.iter().any(|c|c.id=="9002"),"other servers' channels stay out of this list");
+    }
+    #[test]fn nitro_offers_every_servers_emojis_and_others_only_get_the_current_server(){
+        let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);
+        let current=app.guild.clone().expect("sample server");
+        app.account_event("GUILD_CREATE",&serde_json::json!({"id":current,"name":"Eclipse Lab","emojis":[{"id":"1","name":"here"}]}));
+        app.account_event("GUILD_CREATE",&serde_json::json!({"id":"700","name":"Gaming","emojis":[{"id":"2","name":"pog","animated":true}]}));
+        app.account_event("GUILD_EMOJIS_UPDATE",&serde_json::json!({"guild_id":"700","emojis":[{"id":"2","name":"pog","animated":true},{"id":"3","name":"gg"}]}));
+        if let Some(user)=app.user.as_mut(){user.premium_type=0;}
+        assert!(app.nitro_emojis().is_empty(),"without Nitro only the current server's emojis are offered");
+        if let Some(user)=app.user.as_mut(){user.premium_type=2;}
+        let servers=app.nitro_emojis();
+        assert_eq!(servers.len(),1,"the current server is not repeated");
+        assert_eq!(servers[0].0,"Gaming");assert_eq!(servers[0].1.iter().map(|e|e.token()).collect::<Vec<_>>(),["<a:pog:2>","<:gg:3>"]);
+        app.guild=None;assert_eq!(app.nitro_emojis().len(),2,"in DMs every server's emojis are offered");
     }
     fn composer_frame(ctx:&egui::Context,app:&mut Eclipse,channel:&Channel,events:Vec<egui::Event>)->egui::FullOutput{ctx.run(input(events),|ctx|{egui::CentralPanel::default().show(ctx,|ui|{app.composer(ui,ctx,channel);});})}
     #[test]fn typing_at_lists_members_and_enter_inserts_a_mention_sent_as_an_id(){

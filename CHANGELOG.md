@@ -1,5 +1,7 @@
 # Unreleased
 
+- Nitro uploads: files go through Discord's own upload flow (an upload slot, then a direct upload with no time limit), so large files up to your plan's limit work. Discord checks the limit before anything is sent; Eclipse's own ceiling is 1 GB. Uploads that took over 30 seconds used to fail.
+- Nitro emojis: the emoji picker shows custom emojis from all your servers, a section per server, usable in servers, DMs and group chats. Without Nitro it still offers the current server's emojis.
 - Live voice ping next to "Voice connected": the round trip to Discord's voice server, updated every few seconds and colored green, yellow or red.
 - Being moved to another voice channel (by a moderator, or a bot's "join to create" channel) now follows you there and reconnects, instead of disconnecting you.
 - New, renamed and deleted channels appear live in the server list (Eclipse ignored these events before, so a bot's new voice channel never showed up).
