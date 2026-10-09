@@ -1,4 +1,4 @@
-# Unreleased
+# Eclipse 0.8.4 — October 9, 2026
 
 - Fixed a stream getting stuck on "Connecting to stream…" when watched again after stopping: Eclipse now tells Discord it left the stream.
 - Friends get the green speaking outline under the voice channel while they talk, not just you.
@@ -25,11 +25,14 @@
 - The call screen now shows everyone in the voice channel, including people who were already there when you joined.
 - With push to talk on, your green speaking outline follows your push-to-talk key instead of microphone activity.
 
-# Eclipse 0.8.2 — October 9, 2026
+# Eclipse 0.8.3 — October 9, 2026
 
 - Scrolls move twice as fast. Consecutive messages from the same author share an avatar and heading, with each message retaining its actions.
 - Direct messages sort by newest message, update with incoming/outgoing activity, and show 25 conversations initially with further batches revealed when scrolling down.
 - Removed the Enter/Shift+Enter instruction below the composer; the keyboard shortcuts still work.
+
+# Eclipse 0.8.2 — October 9, 2026
+
 - The selected server's icon, nameplates, avatar decorations and display-name effects keep animating; other avatars, icons and artwork still animate on hover.
 - Fixed Shop and Quests constantly reloading server icons and avatars: off-screen cards no longer request artwork, and the image cache evicts icons and avatars last.
 - The Direct messages header is now a centered conversation search; the Eclipse icon and the separate search box under Quests are gone, moving the DM list up.
