@@ -1,6 +1,6 @@
 [package]
 name = "eclipse-native"
-version = "0.8.1"
+version = "0.8.2"
 edition = "2021"
 rust-version = "1.98"
 description = "An independent native Rust desktop client for Discord text chat"

@@ -1,4 +1,4 @@
-# Unreleased
+# Eclipse 0.8.2 — October 9, 2026
 
 - The selected server's icon, nameplates, avatar decorations and display-name effects keep animating; other avatars, icons and artwork still animate on hover.
 - Fixed Shop and Quests constantly reloading server icons and avatars: off-screen cards no longer request artwork, and the image cache evicts icons and avatars last.
