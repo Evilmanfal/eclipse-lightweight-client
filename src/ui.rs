@@ -143,6 +143,13 @@ pub struct Eclipse {
     audio_devices:Option<discord_voice::audio::DeviceList>,
     last_typing:Option<Instant>,
     composer_ime: bool,
+    /// The @ suggestion list: open last frame, highlighted row, picked names → user ids, last query sent.
+    mention_open: bool,
+    mention_pick: usize,
+    mention_ids: HashMap<String, String>,
+    mention_query: String,
+    /// Put the cursor in the message box next frame (after Reply).
+    focus_message_box: bool,
     updater: crate::updater::Updater,
 }
 impl Eclipse {
@@ -255,7 +262,7 @@ impl Eclipse {
             picker: Default::default(),
             calls: crate::calls::Calls::new(ctx.clone()),
             applied_prefs:prefs.clone(),prefs,prefs_save_at:None,home:Home::Chat,
-            settings_page:"Account & Profile".into(),settings_search:String::new(),server_settings:false,server_page:"Overview".into(),server:Default::default(),features:HashMap::new(),feature_errors:HashMap::new(),feature_pending:HashSet::new(),account_edit:serde_json::Value::Null,settings_edit:serde_json::Value::Null,server_edit:serde_json::Value::Null,role_edit:None,profile:None,friends:vec![],friend_filter:"Online".into(),friend_search:String::new(),friend_add:String::new(),member_search:String::new(),reply:None,logs:VecDeque::new(),profile_anchor:None,profile_guild:None,profile_just_opened:false,voice_revealed:None,shop_filter:"All".into(),quest_filter:"Discover".into(),spotify:None,game_activity:true,read_latest:HashMap::new(),confirm:None,hotkey_record:None,audio_devices:None,last_typing:None,composer_ime:false,updater:Default::default(),
+            settings_page:"Account & Profile".into(),settings_search:String::new(),server_settings:false,server_page:"Overview".into(),server:Default::default(),features:HashMap::new(),feature_errors:HashMap::new(),feature_pending:HashSet::new(),account_edit:serde_json::Value::Null,settings_edit:serde_json::Value::Null,server_edit:serde_json::Value::Null,role_edit:None,profile:None,friends:vec![],friend_filter:"Online".into(),friend_search:String::new(),friend_add:String::new(),member_search:String::new(),reply:None,logs:VecDeque::new(),profile_anchor:None,profile_guild:None,profile_just_opened:false,voice_revealed:None,shop_filter:"All".into(),quest_filter:"Discover".into(),spotify:None,game_activity:true,read_latest:HashMap::new(),confirm:None,hotkey_record:None,audio_devices:None,last_typing:None,composer_ime:false,mention_open:false,mention_pick:0,mention_ids:HashMap::new(),mention_query:String::new(),focus_message_box:false,updater:Default::default(),
         };
         app.calls.configure(&app.prefs);
         app.images.playback_options(app.prefs.animations&&!app.prefs.reduced_motion,app.prefs.animation_fps);
@@ -351,6 +358,7 @@ impl Eclipse {
             "update-prompt"=>self.updater.preview(false),
             "update-button"=>self.updater.preview(true),
             "inline-edit"=>{if let (Some(user),Some(message))=(self.user.clone(),self.messages.back_mut()){message.author=user;let message=message.clone();self.start_edit(&message);}},
+            "mentions"=>{if let Some(channel)=self.channel.clone(){self.drafts.insert(channel.id.clone(),"@".into());self.focus_message_box=true;}},
             "zoom-in"=>self.prefs.zoom=1.5,
             "zoom-out"=>self.prefs.zoom=0.75,
             "compact"=>self.prefs.compact=true,
@@ -1610,7 +1618,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         );
                         ui.add(
                             egui::Label::new(
-                                RichText::new(crate::message_media::visible_content(reply,self.prefs.images).chars().take(90).collect::<String>())
+                                RichText::new(self.readable(reply,&crate::message_media::visible_content(reply,self.prefs.images)).chars().take(90).collect::<String>())
                                     .size(12.0)
                                     .color(MUTED),
                             )
@@ -1651,7 +1659,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         if self.edit.as_ref().is_some_and(|(id,_)|*id==message.id) {
                             self.inline_editor(ui,message);
                         } else if !message.content.is_empty() {
-                            let display=self.prefs.display(&crate::message_media::visible_content(message,self.prefs.images));
+                            let display=self.prefs.display(&self.readable(message,&crate::message_media::visible_content(message,self.prefs.images)));
                             ui.scope(|ui|{if logged{ui.visuals_mut().override_text_color=Some(LOG_RED);}
                                 for response in crate::message_media::body(ui, &mut self.images, &display){if deleted{response.context_menu(|ui|{if ui.button("Copy deleted text").clicked(){ui.ctx().copy_text(message.content.clone());ui.close();}});}else{response.context_menu(|ui|self.message_menu(ui,message));self.message_click(&response,message);}}
                             });
@@ -1867,6 +1875,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         if self.preview{self.error=Some("Attachments are available after connecting to Discord.".into());}
                         else if let Some(path)=rfd::FileDialog::new().pick_file(){self.files.insert(channel.id.clone(),path);}
                     }
+                    let mention_keys = self.mention_keys(ctx);
                     let draft = self.drafts.entry(channel.id.clone()).or_default();
                     let edit = egui::TextEdit::multiline(draft)
                         .id_salt(("composer",&channel.id))
@@ -1876,6 +1885,8 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         .desired_width((ui.available_width() - 154.0).max(60.0))
                         .frame(false);
                     let response = ui.add_enabled(!pending, edit);
+                    if self.focus_message_box{response.request_focus();self.focus_message_box=false;}
+                    self.mention_popup(ctx, channel, &response, mention_keys);
                     let paste=response.has_focus()&&ctx.input(|i|i.focused)&&crate::clipboard::paste_keys_down();
                     if paste&&!self.paste_down{self.paste_attachment(&channel.id);}
                     self.paste_down=paste;
@@ -1924,7 +1935,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
         if self.pending.is_some() {
             return;
         }
-        let content = self.drafts.get(&channel.id).cloned().unwrap_or_default();
+        let content = crate::message_media::apply_mentions(&self.drafts.get(&channel.id).cloned().unwrap_or_default(), &self.mention_ids);
         let file = self.files.get(&channel.id).cloned();
         if content.trim().is_empty() && file.is_none() {
             return;
@@ -2341,6 +2352,27 @@ mod interaction_tests {
         assert!(app.edit.is_none());
     }
     fn composer_frame(ctx:&egui::Context,app:&mut Eclipse,channel:&Channel,events:Vec<egui::Event>)->egui::FullOutput{ctx.run(input(events),|ctx|{egui::CentralPanel::default().show(ctx,|ui|{app.composer(ui,ctx,channel);});})}
+    #[test]fn typing_at_lists_members_and_enter_inserts_a_mention_sent_as_an_id(){
+        let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);let channel=app.channel.clone().unwrap();let before=app.messages.len();
+        // A member with a real-looking numeric id, sorting first for "jo".
+        let mut member=app.server.members.values().next().expect("sample member").clone();member.user.id="4242".into();member.user.username="joanne".into();member.nick=Some("Joanne".into());
+        let jordan=member.user.clone();app.server.members.insert("4242".into(),member);
+        let enter=egui::Event::Key{key:egui::Key::Enter,physical_key:None,pressed:true,repeat:false,modifiers:Default::default()};
+        let out=composer_frame(&ctx,&mut app,&channel,vec![]);
+        let point=out.shapes.iter().find_map(|s|match &s.shape{egui::Shape::Text(t)if t.galley.job.text.starts_with("Message #")=>Some(t.visual_bounding_rect().center()),_=>None}).expect("composer hint");
+        for pressed in [true,false]{composer_frame(&ctx,&mut app,&channel,vec![egui::Event::PointerMoved(point),egui::Event::PointerButton{pos:point,button:egui::PointerButton::Primary,pressed,modifiers:Default::default()}]);}
+        composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Text("@".into())]);
+        assert!(app.mention_open,"typing @ opens the list");
+        composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Text("jo".into())]);
+        composer_frame(&ctx,&mut app,&channel,vec![enter.clone()]);
+        assert_eq!(app.drafts[&channel.id],format!("@{} ",jordan.username),"Enter picks the highlighted member instead of sending");
+        assert_eq!(app.messages.len(),before);
+        composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Key{key:egui::Key::Enter,physical_key:None,pressed:false,repeat:false,modifiers:Default::default()}]);
+        composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Text("hi".into()),enter]);
+        let sent=app.messages.back().unwrap();assert_eq!(sent.content,format!("<@{}> hi",jordan.id));
+        assert_eq!(app.readable(sent,&sent.content),"@Joanne hi");
+        assert!(app.suggestions(&channel,"ev").iter().any(|s|s.label=="@everyone"));
+    }
     #[test]fn composer_enter_sends_shift_enter_inserts_newline_and_unfocused_enter_does_nothing(){
         let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);let channel=app.channel.clone().unwrap();let before=app.messages.len();
         let enter=|shift|egui::Event::Key{key:egui::Key::Enter,physical_key:None,pressed:true,repeat:false,modifiers:egui::Modifiers{shift,..Default::default()}};

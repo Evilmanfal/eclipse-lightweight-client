@@ -163,6 +163,9 @@ pub struct Message {
     pub embeds: Vec<Embed>,
     #[serde(default)]
     pub pinned: bool,
+    /// Users mentioned in the message, so <@id> can be shown as a name.
+    #[serde(default)]
+    pub mentions: Vec<User>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

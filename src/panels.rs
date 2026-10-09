@@ -13,6 +13,7 @@ use serde_json::{json,Value};
 #[path="full_profile.rs"] mod full_profile;
 #[path="account_menu.rs"] mod account_menu;
 #[path="login_screen.rs"] mod login_screen;
+#[path="mentions.rs"] mod mentions;
 pub(in crate::ui) use login_screen::LoginUi;
 pub(in crate::ui) use user_panel::USER_PANEL_HEIGHT;
 pub(in crate::ui) use profile_popout::profile_key_for;

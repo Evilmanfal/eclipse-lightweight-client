@@ -1,5 +1,8 @@
 # Unreleased
 
+- Mentions read as names: <@id> shows as @name, role mentions as @role and channel links as #channel, in messages and reply previews.
+- Typing @ in the message box lists who you can mention (members, plus @everyone and @here where you're allowed), filtered as you type. Arrow keys or the mouse choose, Tab or Enter inserts; the name is sent as a real mention.
+- Reply puts the cursor straight into the message box.
 - Watch screen shares like Discord: a live friend's call tile shows LIVE and a Watch Stream button, including friends who were already live when you joined. Hovering a live friend under a voice channel also offers Watch Stream (joining the channel first if needed). The watched stream fills the stage with Stop Watching and a volume control, and everyone else sits in a strip below.
 - Sharing your screen opens a Discord-style Screen Share dialog with Applications and Screens tabs, resolution and frame-rate choices, sound sharing and Go Live, instead of a separate window.
 - Shift-hover quick delete removes the message at once, without a confirmation (the right-click Delete still asks).

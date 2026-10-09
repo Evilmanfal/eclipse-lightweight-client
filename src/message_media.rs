@@ -69,6 +69,48 @@ pub fn spans(text: &str) -> Vec<Span<'_>> {
     }
     result
 }
+/// Turns <@id>, <@!id>, <@&role> and <#channel> into readable names. `resolve` gets the kind
+/// ('@' user, '&' role, '#' channel) and the id; unknown ids read like Discord's.
+pub fn replace_mentions(text:&str,resolve:impl Fn(char,&str)->Option<String>)->String{
+    let mut out=String::with_capacity(text.len());let mut rest=text;
+    while let Some(start)=rest.find('<'){
+        out.push_str(&rest[..start]);let tail=&rest[start..];
+        let (kind,skip)=if tail.starts_with("<@!"){('@',3)}else if tail.starts_with("<@&"){('&',3)}else if tail.starts_with("<@"){('@',2)}else if tail.starts_with("<#"){('#',2)}else{('?',0)};
+        let digits=tail.get(skip..).map(|t|t.chars().take_while(char::is_ascii_digit).count()).unwrap_or(0);
+        if kind!='?'&&(1..=20).contains(&digits)&&tail[skip+digits..].starts_with('>'){
+            let id=&tail[skip..skip+digits];
+            out.push_str(&resolve(kind,id).unwrap_or_else(||match kind{'#'=>"#unknown".into(),'&'=>"@unknown-role".into(),_=>"@unknown-user".into()}));
+            rest=&tail[skip+digits+1..];
+        }else{out.push('<');rest=&tail[1..];}
+    }
+    out.push_str(rest);out
+}
+/// The @word being typed just before the cursor (a char index): its start and the text after @.
+pub fn mention_token(text:&str,cursor:usize)->Option<(usize,String)>{
+    let chars:Vec<char>=text.chars().collect();let cursor=cursor.min(chars.len());
+    let start=chars[..cursor].iter().rposition(|c|c.is_whitespace()).map(|i|i+1).unwrap_or(0);
+    let word:String=chars[start..cursor].iter().collect();
+    let query=word.strip_prefix('@')?;
+    (query.chars().count()<=32&&!query.contains('@')).then(||(start,query.to_owned()))
+}
+/// Swaps each picked @username for <@id> before sending, only where the whole name was typed.
+pub fn apply_mentions(text:&str,ids:&std::collections::HashMap<String,String>)->String{
+    let mut labels:Vec<_>=ids.iter().collect();labels.sort_by_key(|(label,_)|std::cmp::Reverse(label.len()));
+    let mut out=text.to_owned();
+    for (label,id) in labels{
+        let mut result=String::new();let mut rest=out.as_str();
+        while let Some(at)=rest.find(label.as_str()){
+            let after=rest[at+label.len()..].chars().next();
+            let before=if at>0{rest[..at].chars().last()}else{result.chars().last()};
+            let whole=!after.is_some_and(|c|c.is_alphanumeric()||c=='_'||c=='.')&&!before.is_some_and(|c|c.is_alphanumeric());
+            result.push_str(&rest[..at]);
+            if whole{result.push_str(&format!("<@{id}>"));}else{result.push_str(label);}
+            rest=&rest[at+label.len()..];
+        }
+        result.push_str(rest);out=result;
+    }
+    out
+}
 /// The web address inside a word, without surrounding <> or trailing punctuation.
 pub fn link_in(word:&str)->Option<&str>{
     let link=word.trim_start_matches(['<','(']).trim_end_matches(['>',',',';','.','!','?',':',')','\'','"']);
@@ -387,6 +429,17 @@ mod tests {
         assert_eq!(file_name("https://media.discordapp.net/x/a%3Cb>.gif"),"a%3Cb_.gif");
         assert_eq!(file_name("https://example.com/"),"image.png");
         assert_eq!(file_name("https://example.com/photo"),"photo.png");
+    }
+    #[test]
+    fn mentions_read_as_names_and_picked_names_are_sent_as_ids(){
+        let resolve=|kind:char,id:&str|match (kind,id){('@',"1")=>Some("@husain".to_owned()),('&',"9")=>Some("@Mods".to_owned()),('#',"5")=>Some("#general".to_owned()),_=>None};
+        assert_eq!(replace_mentions("hi <@1> and <@!1>, ask <@&9> in <#5>",resolve),"hi @husain and @husain, ask @Mods in #general");
+        assert_eq!(replace_mentions("<@2> <@abc> a<b",resolve),"@unknown-user <@abc> a<b");
+        assert_eq!(mention_token("hey @hu",7),Some((4,"hu".into())));
+        assert_eq!(mention_token("@",1),Some((0,String::new())));
+        assert_eq!(mention_token("mail a@b",8),None);assert_eq!(mention_token("hey hu",6),None);
+        let ids:std::collections::HashMap<String,String>=[("@husain".to_owned(),"1".to_owned()),("@hus".to_owned(),"2".to_owned())].into();
+        assert_eq!(apply_mentions("@husain and @hus, not @husainx or a@hus",&ids),"<@1> and <@2>, not @husainx or a@hus");
     }
     #[test]
     fn unicode_and_custom_keep_surrounding_text() {

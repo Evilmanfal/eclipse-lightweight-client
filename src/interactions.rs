@@ -64,7 +64,7 @@ impl Eclipse {
         }
     }
     pub(in crate::ui) fn message_menu(&mut self,ui:&mut egui::Ui,message:&Message){
-        if ui.button("Reply").clicked(){self.reply=Some(message.clone());ui.close();}
+        if ui.button("Reply").clicked(){self.reply=Some(message.clone());self.focus_message_box=true;ui.close();}
         if ui.button("Copy text").clicked(){ui.ctx().copy_text(message.content.clone());ui.close();}
         ui.menu_button("Add reaction",|ui|{for emoji in ["👍","❤️","😂","🎉","👀","✅"]{if ui.button(emoji).clicked(){self.react(message,emoji.into(),false);ui.close();}}});
         let mine=self.user.as_ref().is_some_and(|u|u.id==message.author.id);let actor=self.user.as_ref().map(|u|u.id.as_str()).unwrap_or("");let can_manage=self.guild.is_some()&&self.server.can(actor,13);
@@ -77,7 +77,7 @@ impl Eclipse {
     }
     pub(in crate::ui) fn message_click(&mut self,response:&egui::Response,message:&Message){
         if !self.prefs.click_actions{return;}
-        if response.double_clicked(){self.reply=Some(message.clone());}
+        if response.double_clicked(){self.reply=Some(message.clone());self.focus_message_box=true;}
         if response.clicked(){let modifiers=response.ctx.input(|i|i.modifiers);if modifiers.ctrl{response.ctx.copy_text(message.content.clone());}else if modifiers.alt&&self.user.as_ref().is_some_and(|u|u.id==message.author.id){self.start_edit(message);}}
     }
     pub(in crate::ui) fn quick_message_actions(&mut self,ui:&mut egui::Ui,response:&egui::Response,message:&Message){
