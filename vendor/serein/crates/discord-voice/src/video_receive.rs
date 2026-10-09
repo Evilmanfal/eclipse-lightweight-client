@@ -24,7 +24,9 @@ const QUEUE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_WIDTH: u32 = 1920;
 const MAX_PIXELS: u64 = 1920 * 1080;
 const START_CODE: [u8; 4] = [0, 0, 0, 1];
-const MAX_DECODE_AGE: Duration = Duration::from_millis(150);
+/// Frames queued longer than this are skipped (and a keyframe requested). Long enough to ride
+/// out a hardware decoder starting up, so start-up never cascades into dropped video.
+const MAX_DECODE_AGE: Duration = Duration::from_millis(500);
 
 /// One decoded remote picture, packed RGBA.
 pub struct RemoteFrame<'a> {
@@ -911,9 +913,9 @@ fn decode_loop(
 			Ordering::Relaxed,
 		);
 		if age > MAX_DECODE_AGE {
+			// Skip the late frame but keep the decoder: rebuilding it (slow for hardware
+			// decoders) made the following frames late too, so only keyframes ever showed.
 			counters.stale.fetch_add(1, Ordering::Relaxed);
-			decoders.remove(&frame.user);
-			decoder_counts(&decoders, &counters);
 			mark_broken(frame.user, &mut broken, &lost);
 			continue;
 		}
