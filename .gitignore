@@ -6,4 +6,5 @@
 
 # Built binaries are published as GitHub Releases, not committed.
 /Eclipse.exe
+/SHA256SUMS.txt
 *.zip
