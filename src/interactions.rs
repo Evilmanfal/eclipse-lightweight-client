@@ -29,7 +29,9 @@ impl Eclipse {
         let can_delete=mine||(self.guild.is_some()&&self.server.can(actor,13));
         if !mine&&!can_delete{return;}
         let count=if mine{2.0}else{1.0};
-        let rect=egui::Rect::from_min_size(egui::pos2(response.rect.right()-count*32.0-8.0,response.rect.top()+2.0),Vec2::new(count*32.0+4.0,32.0));
+        // Keep button centres inside short grouped rows so moving to a control retains hover.
+        let top=response.rect.top()+((response.rect.height()-32.0)/2.0).min(2.0);
+        let rect=egui::Rect::from_min_size(egui::pos2(response.rect.right()-count*32.0-8.0,top),Vec2::new(count*32.0+4.0,32.0));
         ui.painter().rect_filled(rect,10,CARD);
         ui.painter().rect_stroke(rect,10,Stroke::new(1_f32,BORDER),egui::StrokeKind::Inside);
         let id=egui::Id::new(("message-actions",&message.channel_id,&message.id));

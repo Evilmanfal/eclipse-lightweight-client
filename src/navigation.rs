@@ -28,7 +28,20 @@ impl Cache {
     pub fn invalidate_channels(&mut self,id:&str){self.guilds.retain(|e|e.0!=id);}
 }
 pub fn sort_channels(channels:&mut [Channel]){let positions:std::collections::HashMap<_,_>=channels.iter().filter(|c|c.kind==4).map(|c|(c.id.clone(),c.position)).collect();channels.sort_by_key(|c|(c.parent_id.as_ref().and_then(|id|positions.get(id)).copied().unwrap_or(c.position),if c.kind==4{-1}else{c.position}));}
+/// Discord message snowflakes are numeric timestamps, regardless of string length.
+pub fn sort_dms(channels: &mut [Channel]) {
+    channels.sort_by(|a, b| {
+        let latest = |c: &Channel| c.last_message_id.as_deref().and_then(|id| id.parse::<u64>().ok()).unwrap_or(0);
+        latest(b).cmp(&latest(a)).then_with(|| a.id.cmp(&b.id))
+    });
+}
 #[cfg(test)]mod tests{use super::*;
+    #[test]fn direct_messages_sort_by_numeric_latest_message_with_empty_conversations_last(){
+        let dm=|id:&str,last:Option<&str>|Channel{id:id.into(),last_message_id:last.map(str::to_owned),kind:1,..Default::default()};
+        let mut channels=vec![dm("empty",None),dm("older",Some("9")),dm("newest",Some("100")),dm("middle",Some("10"))];
+        sort_dms(&mut channels);
+        assert_eq!(channels.iter().map(|c|c.id.as_str()).collect::<Vec<_>>(),["newest","middle","older","empty"]);
+    }
     #[test]fn revisits_keep_latest_messages_and_invalidation_drops_stale_history(){let mut c=Cache::default();let m=Message{id:"1".into(),channel_id:"chat".into(),content:"before".into(),..Default::default()};c.save("chat",&VecDeque::from([m.clone()]),true);let mut edited=m;edited.content="after".into();c.receive(edited);assert_eq!(c.get("chat").unwrap().0[0].content,"after");c.invalidate("chat");assert!(c.get("chat").is_none());}
     #[test]fn caches_are_bounded_and_guilds_stay_separate(){let mut c=Cache::default();for n in 0..30{c.save(&n.to_string(),&VecDeque::new(),false);c.save_channels(&n.to_string(),&[Channel{id:n.to_string(),..Default::default()}]);}assert_eq!(c.histories.len(),6);assert_eq!(c.guilds.len(),12);assert!(c.get("0").is_none());assert_eq!(c.channels("29").unwrap()[0].id,"29");c.invalidate_channels("29");assert!(c.channels("29").is_none());}
 }
