@@ -56,7 +56,7 @@ impl Eclipse {
                         let member=data["guild_member"]["avatar"].as_str();
                         let portrait=avatar(ui,user.name(),66.);portrait_marker=Some(portrait);
                         if ui.interact(portrait,egui::Id::new("profile-popout-avatar"),egui::Sense::click()).on_hover_text("View full profile").clicked(){full=true;}let url=if self.preview{Some(format!("demo://user/{}",user.id))}else{assets::avatar_url(&user,self.profile_guild.as_deref(),member)};self.paint_image(ui,portrait,url,33);
-                        let mut decorated=user.clone();if let Some(value)=data["guild_member"]["avatar_decoration_data"].as_object(){decorated.avatar_decoration_data=Some(Value::Object(value.clone()));}crate::identity::paint_art(ui,&mut self.images,portrait.expand(6.6),crate::identity::decoration(&decorated),0);crate::presence::badge(ui,portrait,self.presences.get(&user.id,self.profile_guild.as_deref()));
+                        let mut decorated=user.clone();if let Some(value)=data["guild_member"]["avatar_decoration_data"].as_object(){decorated.avatar_decoration_data=Some(Value::Object(value.clone()));}crate::identity::paint_art_playing(ui,&mut self.images,portrait.expand(6.6),crate::identity::decoration(&decorated),0);crate::presence::badge(ui,portrait,self.presences.get(&user.id,self.profile_guild.as_deref()));
                         ui.allocate_ui_with_layout(Vec2::new(ui.available_width(),66.),egui::Layout::right_to_left(egui::Align::Min),|ui|{
                             ui.menu_button("•••",|ui|self.user_menu(ui,&user));
                         });
@@ -64,7 +64,7 @@ impl Eclipse {
                     ui.add_space(4.);
                     let nick=data["guild_member"]["nick"].as_str().or_else(||self.server.members.get(&user.id).filter(|_|self.profile_guild.as_deref()==Some(&self.server.id)).and_then(|m|m.nick.as_deref())).unwrap_or_else(||user.name()).to_owned();
                     let name_rect=egui::Rect::from_min_size(ui.cursor().min,Vec2::new(ui.available_width(),34.));
-                    crate::identity::paint_art(ui,&mut self.images,name_rect,crate::identity::nameplate(&user),7);
+                    crate::identity::paint_art_playing(ui,&mut self.images,name_rect,crate::identity::nameplate(&user),7);
                     ui.horizontal(|ui|{crate::identity::name(ui,&user,&nick,23.,TEXT);self.guild_tag_chip(ui,&user);});
                     ui.label(RichText::new(format!("@{}",user.username)).size(12.).color(MUTED));
                     if data["badges"].as_array().is_some_and(|a|!a.is_empty())||data["guild_badges"].as_array().is_some_and(|a|!a.is_empty()){ui.horizontal_wrapped(|ui|{ui.spacing_mut().item_spacing=Vec2::new(5.,4.);for b in data["badges"].as_array().into_iter().flatten().chain(data["guild_badges"].as_array().into_iter().flatten()).take(24){let(rect,response)=ui.allocate_exact_size(Vec2::splat(20.),egui::Sense::hover());crate::identity::paint_art(ui,&mut self.images,rect,b["icon"].as_str().and_then(crate::identity::badge),0);response.on_hover_text(b["description"].as_str().unwrap_or("Profile badge"));}});}

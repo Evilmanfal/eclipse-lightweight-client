@@ -1,3 +1,9 @@
+# Unreleased
+
+- The selected server's icon, nameplates, avatar decorations and display-name effects keep animating; other avatars, icons and artwork still animate on hover.
+- Fixed Shop and Quests constantly reloading server icons and avatars: off-screen cards no longer request artwork, and the image cache evicts icons and avatars last.
+- Clicking your avatar or name in the bottom-left bar opens a Discord-style account menu: profile banner and bio, Edit Profile, status (Online, Idle, Do Not Disturb, Invisible), Switch Accounts (log out) and Copy User ID.
+
 # Eclipse 0.8.1 — October 9, 2026
 
 - Bottom-left account bar spans the server rail and channel list: nameplate background (theme colour without one), avatar, styled name and status, borderless activity/mute/deafen/settings controls with input and output device menus. Removed the Live and Push to Talk labels.

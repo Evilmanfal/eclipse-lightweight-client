@@ -30,7 +30,8 @@ impl Eclipse {
             let image=product_image(product,&effects,self.prefs.animations&&!self.prefs.reduced_motion);
             if kind==1&&!self.preview&&!self.features.contains_key("profile-effects")&&!self.feature_errors.contains_key("profile-effects"){self.request_feature("profile-effects","/user-profile-effects".into());}
             if let Some(background)=product["preview_assets"]["bg_static"].as_str().and_then(collectible_asset){crate::identity::paint_art(ui,&mut self.images,rect,Some(background),9);}
-            if let Some(url)=image{
+            // Off-screen cards must not request art: a large catalog would churn the shared image cache.
+            if let Some(url)=image.filter(|_|ui.is_rect_visible(rect)){
                 if let Some(texture)=self.images.texture_hover(&url,rect,ui.ctx()){
                     let dimensions=self.images.dimensions(&url,rect.size(),ui.ctx()).unwrap_or(rect.size());let size=dimensions*((rect.width()-16.)/dimensions.x).min((rect.height()-16.)/dimensions.y);
                     let art=egui::Rect::from_center_size(rect.center(),size);egui::Image::new((texture,size)).corner_radius(7).paint_at(ui,art);

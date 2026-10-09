@@ -11,6 +11,7 @@ use serde_json::{json,Value};
 #[path="user_panel.rs"] mod user_panel;
 #[path="pins.rs"] mod pins;
 #[path="full_profile.rs"] mod full_profile;
+#[path="account_menu.rs"] mod account_menu;
 pub(in crate::ui) use user_panel::USER_PANEL_HEIGHT;
 pub(in crate::ui) use profile_popout::profile_key_for;
 
