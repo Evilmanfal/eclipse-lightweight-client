@@ -112,6 +112,8 @@ pub struct Calls {
     picker_screens: bool,
     /// Someone to start watching once the call connects (Watch Stream from outside the call).
     pending_watch: Option<String>,
+    /// A stream we just told Discord we left, so its STREAM_DELETE reply can't cancel a re-watch.
+    left_stream: Option<(String, Instant)>,
     sources: Vec<voice::screen::Source>,
     source: usize,
     stream_key: Option<String>,
@@ -212,6 +214,7 @@ impl Calls {
             share_picker: false,
             picker_screens: true,
             pending_watch: None,
+            left_stream: None,
             sources: vec![],
             source: 0,
             stream_key: None,
@@ -261,6 +264,7 @@ impl Calls {
         self.participants.clear();
         self.speaking.clear();
         self.pending_watch = None;
+        self.left_stream = None;
         self.media = None;
         self.channel = None;
         self.user = None;
@@ -418,7 +422,11 @@ impl Calls {
                 if key == self.stream_key.as_deref() {
                     self.stop_share();
                 }
-                if key == self.watch_key.as_deref() {
+                // Discord confirming that we left: harmless, even if we are already watching again.
+                let ours = self.left_stream.as_ref().is_some_and(|(left, at)| Some(left.as_str()) == key && at.elapsed() < Duration::from_secs(5));
+                if ours {
+                    self.left_stream = None;
+                } else if key == self.watch_key.as_deref() {
                     if let Some(media) = &mut self.media {
                         if let Some(task) = media.watch_task.take() {
                             task.abort();
@@ -1186,7 +1194,11 @@ impl Calls {
         Ok(())
     }
     pub fn stop_watching(&mut self){
-        if self.watch_key.take().is_none(){return;}
+        let Some(key)=self.watch_key.take() else{return};
+        // Tell Discord we left; otherwise it still counts us as watching and never answers the
+        // next Watch Stream, which then hangs on "Connecting to stream…".
+        self.outbound.push(json!({"op":19,"d":{"stream_key":key}}));
+        self.left_stream=Some((key,Instant::now()));
         if let Some(media)=&mut self.media{if let Some(task)=media.watch_task.take(){task.abort();}}
         self.textures.clear();
         self.expanded=false;
@@ -1371,6 +1383,24 @@ mod tests {
         let (intent, epoch) = calls.intent();
         calls.hang_up();
         assert_ne!(intent.load(Ordering::Acquire), epoch);
+    }
+    #[test]
+    fn watching_again_after_stopping_reconnects(){
+        let mut calls=Calls::new(egui::Context::default());
+        let me=User{id:"1".into(),username:"me".into(),..Default::default()};
+        let channel=Channel{id:"10".into(),guild_id:Some("5".into()),kind:2,..Default::default()};
+        calls.join(&channel,&me,false).unwrap();
+        calls.sync_roster(vec![(me.clone(),false),(User{id:"2".into(),username:"friend".into(),..Default::default()},true)]);
+        let key=stream_key(&channel,"2");
+        // Pretend the call connected: watching sends the watch request at once.
+        calls.ready=true;calls.watch_key=Some(key.clone());calls.outbound.clear();
+        calls.stop_watching();
+        assert_eq!(calls.outbound.pop(),Some(json!({"op":19,"d":{"stream_key":key}})),"leaving is sent to Discord");
+        calls.watch_key=Some(key.clone());
+        calls.signal("STREAM_DELETE",&json!({"stream_key":key}));
+        assert_eq!(calls.watch_key.as_deref(),Some(key.as_str()),"the reply to leaving does not cancel watching again");
+        calls.signal("STREAM_DELETE",&json!({"stream_key":key}));
+        assert!(calls.watch_key.is_none(),"a real end of the stream still stops it");
     }
     #[test]
     fn friends_show_as_speaking_while_the_voice_server_reports_them(){

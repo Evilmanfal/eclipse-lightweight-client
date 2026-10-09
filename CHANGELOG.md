@@ -1,5 +1,6 @@
 # Unreleased
 
+- Fixed a stream getting stuck on "Connecting to stream…" when watched again after stopping: Eclipse now tells Discord it left the stream.
 - Friends get the green speaking outline under the voice channel while they talk, not just you.
 - 1080p streams keep up too: large pictures are color-converted on four CPU threads (about 2.9 ms per 1080p picture instead of 14.7 ms).
 - Faster stream decoding on Windows: video is decoded on the CPU instead of waiting on a per-picture GPU round trip, with a quicker color conversion and one less copy per picture, so 720p60 streams can keep up.
