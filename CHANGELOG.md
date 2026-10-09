@@ -1,5 +1,7 @@
 # Eclipse 0.8 — October 8, 2026
 
+- Animated avatars, server icons, emoji, banners, profile effects, shop artwork and name effects play only while hovered and return to their first frame afterward. GIFs in chat and in the GIF picker still play automatically.
+- All animations, GIFs included, pause on their current frame while the Eclipse window is not focused and continue when it regains focus.
 - Emoji and GIF pickers attach above their composer buttons, follow resizing/zooming and dismiss on outside click, Escape, × or toggling the button.
 - Ctrl+wheel zoom with a saved 75–150% scale; Ctrl+0 resets. Side panels adapt at higher zoom.
 - Less padding around the chat, composer and settings; tighter message spacing.
@@ -11,6 +13,7 @@
 - Removed repetitive settings navigation tooltips.
 - Smaller server-only online member count, using reported server totals or known online/idle/DND statuses. No count in DMs/group chats.
 - Shift-hover message actions provide quick edit and permitted delete, retaining delete confirmation.
+- Compact mode (Appearance or Chat): 85% interface scale, with panels joined into one connected surface and thin dividers instead of gaps and rounded cards. Buttons stay rounded, message avatars stay visible and message spacing is tighter. Replaces the earlier avatar-free compact messages.
 - Updates the same Eclipse.exe and ZIP and preserves local preferences.
 
 # Eclipse 0.7 — October 8, 2026

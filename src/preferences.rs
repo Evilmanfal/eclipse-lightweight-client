@@ -54,7 +54,7 @@ impl Preferences {
             d.insert_temp(egui::Id::new("eclipse-name-animation"), self.animations&&!self.reduced_motion);
             d.insert_temp(egui::Id::new("eclipse-animation-fps"), self.animation_fps);
         });
-        ctx.set_zoom_factor(self.zoom);
+        ctx.set_zoom_factor(self.zoom*if self.compact{COMPACT_SCALE}else{1.0});
         let mut style = (*ctx.style()).clone();
         let background = color(&self.theme.background).unwrap_or(Color32::from_gray(11));
         let surface = color(&self.theme.surface).unwrap_or(Color32::from_gray(23));
@@ -95,6 +95,8 @@ impl Preferences {
         ctx.set_style(style);
     }
 }
+/// Compact mode draws the whole interface at this fraction of the chosen UI scale.
+pub const COMPACT_SCALE:f32=0.85;
 pub const USER_CATEGORIES:&[(&str,&[&str])]=&[
     ("YOUR ACCOUNT", &["Account & Profile","Connections","Devices","Authorized Apps"]),
     ("PRIVACY & SAFETY", &["Content & Social","Data & Privacy","Family Center"]),
@@ -106,6 +108,7 @@ pub const USER_CATEGORIES:&[(&str,&[&str])]=&[
 #[cfg(test)]mod tests{use super::*;
 #[test]fn imports_only_literal_theme_colors(){let t=Theme::import(":root { --background-primary: #010203; --brand-500: #123456; } @import 'evil';").unwrap();assert_eq!(t.background,"#010203");assert_eq!(t.accent,"#123456");assert!(Theme::import("@import 'evil';").is_err());}
 #[test]fn display_plugins_cannot_change_original_message(){let p=Plugin::parse(r#"{"name":"Local display","enabled":true,"replacements":[{"find":"hello","display":"hi"}]}"#).unwrap();let mut prefs=Preferences::default();prefs.plugins.push(p);let original="hello world";assert_eq!(prefs.display(original),"hi world");assert_eq!(original,"hello world");assert!(Plugin::parse(r#"{"name":"Bad","replacements":[{"find":"","display":"x"}]}"#).is_err());}
+#[test]fn compact_mode_zooms_the_interface_out_from_the_chosen_scale(){let ctx=egui::Context::default();let mut p=Preferences::default();p.zoom=1.2;let zoom=|p:&Preferences|{p.apply(&ctx);let _=ctx.run(Default::default(),|_|{});ctx.zoom_factor()};assert!((zoom(&p)-1.2).abs()<0.001);p.compact=true;assert!((zoom(&p)-1.2*COMPACT_SCALE).abs()<0.001);}
 #[test]fn preferences_are_bounded_and_contain_no_credentials(){let mut p=Preferences::default();p.font_size=999.;p.animation_fps=999;p.input_gain=999;p.normalize();assert_eq!(p.font_size,24.);assert_eq!(p.animation_fps,60);assert_eq!(p.input_gain,200);let v=serde_json::to_value(p).unwrap();assert!(v.get("token").is_none());}
 #[test] fn legacy_theme_upgrade_keeps_hotkeys_and_custom_palettes() {
     let mut p:Preferences=serde_json::from_str(r##"{"theme":{"name":"Charcoal & cyan","background":"#1e2028","surface":"#16181e","accent":"#41b7cd","text":"#b2bed5"},"push_to_talk":true,"ptt_key":65,"ptt_ctrl":true,"animation_fps":24,"ui_sounds":false}"##).unwrap();

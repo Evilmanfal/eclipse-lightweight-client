@@ -240,6 +240,7 @@ impl Picker {
                                     Some(unicode_url(emoji)),
                                     emoji,
                                     Vec2::splat(32.0),
+                                    false,
                                 )
                                 .on_hover_text(*name)
                                 .clicked()
@@ -267,6 +268,7 @@ impl Picker {
                                         emoji.image(),
                                         &emoji.name,
                                         Vec2::splat(32.0),
+                                        false,
                                     )
                                     .on_hover_text(&emoji.name)
                                     .clicked()
@@ -290,6 +292,7 @@ impl Picker {
                                     Some(gif.image().into()),
                                     "GIF",
                                     Vec2::new(120.0, 95.0),
+                                    true,
                                 )
                                 .on_hover_text(&gif.title)
                                 .clicked()
@@ -316,6 +319,7 @@ fn image_button(
     url: Option<String>,
     fallback: &str,
     size: Vec2,
+    gif: bool,
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     if response.hovered() {
@@ -323,7 +327,9 @@ fn image_button(
             .rect_filled(rect, 12, egui::Color32::from_gray(47));
     }
     if ui.is_rect_visible(rect) {
-        if let Some(texture) = url.and_then(|url| images.texture_sized(&url,rect.size(), ui.ctx())) {
+        // GIF results keep playing; animated emoji play only on hover.
+        let texture = url.and_then(|url| if gif { images.texture_sized(&url, rect.size(), ui.ctx()) } else { images.texture_hover(&url, rect, ui.ctx()) });
+        if let Some(texture) = texture {
             egui::Image::new((texture, size - Vec2::splat(6.0))).paint_at(ui, rect.shrink(3.0));
         } else {
             ui.painter().text(

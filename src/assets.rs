@@ -359,6 +359,8 @@ struct Texture {
     used: u64,
     data: Decoded,
     playback: Playback,
+    /// Last egui pass that asked this texture to play.
+    played: u64,
 }
 pub struct Images {
     animate:bool,
@@ -503,6 +505,7 @@ impl Images {
                 used: self.clock,
                 data,
                 playback: Playback::default(),
+                played: 0,
             },
         );
     }
@@ -557,25 +560,43 @@ impl Images {
             }
         }
     }
+    /// Chat GIFs and GIF search results: animate continuously.
     pub fn texture_sized(&mut self,url:&str,size:egui::Vec2,ctx:&egui::Context)->Option<TextureId>{
-        self.texture_key(&cache_key(url,resolution(size,ctx.pixels_per_point())),ctx)
+        self.texture_key(&cache_key(url,resolution(size,ctx.pixels_per_point())),ctx,true)
+    }
+    /// Everything else (avatars, emoji, banners, effects, artwork): animate only while the pointer is over `rect`.
+    pub fn texture_hover(&mut self,url:&str,rect:egui::Rect,ctx:&egui::Context)->Option<TextureId>{
+        self.texture_key(&cache_key(url,resolution(rect.size(),ctx.pixels_per_point())),ctx,hovered(ctx,rect))
     }
     pub fn dimensions(&self,url:&str,size:egui::Vec2,ctx:&egui::Context)->Option<egui::Vec2>{
         self.textures.get(&cache_key(url,resolution(size,ctx.pixels_per_point()))).map(|t|{let size=t.handle.size();egui::vec2(size[0]as f32,size[1]as f32)})
     }
-    pub fn texture(&mut self, key: &str, ctx: &egui::Context) -> Option<TextureId> { self.texture_key(key,ctx) }
-    fn texture_key(&mut self, key: &str, ctx: &egui::Context) -> Option<TextureId> {
+    /// Unsized lookup that animates only while the pointer is over `rect`.
+    pub fn texture(&mut self, key: &str, rect: egui::Rect, ctx: &egui::Context) -> Option<TextureId> { self.texture_key(key,ctx,hovered(ctx,rect)) }
+    fn texture_key(&mut self, key: &str, ctx: &egui::Context, play: bool) -> Option<TextureId> {
         self.clock = self.clock.wrapping_add(1);
         if let Some(texture) = self.textures.get_mut(key) {
             texture.used = self.clock;
-            if self.animate && texture.data.frames.len() > 1 {
-                if let Some(index) = texture.playback.advance(Instant::now(), &texture.data,self.frame_interval) {
-                    texture.handle.set(
-                        texture.data.frames[index].image.clone(),
-                        egui::TextureOptions::LINEAR,
-                    );
+            // An unfocused window holds every animation, GIFs included, on its current frame.
+            if self.animate && texture.data.frames.len() > 1 && ctx.input(|i|i.focused) {
+                // One texture can be drawn in several places. It plays if any of them
+                // asked during this pass or the previous one, so draw order does not matter.
+                let pass = ctx.cumulative_pass_nr();
+                if play {
+                    texture.played = pass;
+                    if let Some(index) = texture.playback.advance(Instant::now(), &texture.data,self.frame_interval) {
+                        texture.handle.set(
+                            texture.data.frames[index].image.clone(),
+                            egui::TextureOptions::LINEAR,
+                        );
+                    }
+                    ctx.request_repaint_after(self.frame_interval);
+                } else if texture.played.saturating_add(1) < pass && texture.playback.index != 0 {
+                    texture.playback = Playback { uploads: texture.playback.uploads + 1, ..Playback::default() };
+                    texture.handle.set(texture.data.frames[0].image.clone(), egui::TextureOptions::LINEAR);
+                } else if texture.played.saturating_add(1) == pass {
+                    ctx.request_repaint();
                 }
-                ctx.request_repaint_after(self.frame_interval);
             }
             return Some(texture.handle.id());
         }
@@ -603,6 +624,7 @@ impl Images {
     pub fn playback_options(&mut self,animate:bool,fps:u32){self.animate=animate;self.frame_interval=Duration::from_secs_f64(1. / fps.clamp(5,60) as f64);}
     pub fn failed(&self,key:&str)->bool{self.failed.contains_key(key)||[64,128,256,512,1024].into_iter().any(|n|self.failed.contains_key(&cache_key(key,n)))}
 }
+fn hovered(ctx:&egui::Context,rect:egui::Rect)->bool{ctx.pointer_hover_pos().is_some_and(|p|rect.contains(p))}
 fn bundled(key:&str)->Option<&'static [u8]>{match key{
     "builtin://discord/nitro-background"=>Some(include_bytes!("../assets/discord/nitro-background.png")),
     "builtin://discord/nitro-wumpus"=>Some(include_bytes!("../assets/discord/nitro-wumpus.webp")),
@@ -834,13 +856,33 @@ mod tests {
         assert!(long.sampled);
     }
     #[test]
+    fn unfocused_window_pauses_all_animations() {
+        let ctx = egui::Context::default();
+        let mut cache = Images::new(&ctx);
+        let frames = (0..4).map(|i| Frame { image: demo_image("pause", i as f32, 8), delay: Duration::from_millis(20) }).collect();
+        cache.insert(&ctx, "gif".into(), Decoded::new(frames, false).unwrap());
+        let mut step = |focused: bool| {
+            let _ = ctx.run(egui::RawInput { focused, ..Default::default() }, |ctx| { cache.texture_key("gif", ctx, true); });
+            thread::sleep(Duration::from_millis(10));
+            cache.textures["gif"].playback.elapsed
+        };
+        step(true);
+        let playing = step(true);
+        assert!(playing > Duration::ZERO);
+        let paused = step(false);
+        assert_eq!(step(false), paused);
+        assert_eq!(step(false), paused);
+        step(true);
+        assert!(step(true) > paused);
+    }
+    #[test]
     fn cache_evicts_old_images_and_discards_inflight_images_after_clear() {
         let ctx = egui::Context::default();
         let mut cache = Images::new(&ctx);
         for i in 0..160 {
             let key = format!("demo://cache/{i}");
             let until = Instant::now() + Duration::from_secs(5);
-            while cache.texture(&key, &ctx).is_none() {
+            while cache.texture(&key, egui::Rect::NOTHING, &ctx).is_none() {
                 cache.poll(&ctx);
                 assert!(Instant::now() < until, "image worker did not finish");
                 thread::sleep(Duration::from_millis(1));
@@ -875,7 +917,7 @@ mod tests {
             .textures
             .values()
             .all(|v| v.data.duration == Duration::from_secs(6)));
-        cache.texture("demo://inflight", &ctx);
+        cache.texture("demo://inflight", egui::Rect::NOTHING, &ctx);
         cache.clear();
         thread::sleep(Duration::from_millis(30));
         cache.poll(&ctx);

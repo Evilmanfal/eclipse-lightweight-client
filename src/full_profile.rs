@@ -20,7 +20,7 @@ impl Eclipse {
         // The banner (or the profile colours) fills the screen behind the dimmed modal backdrop.
         let backdrop=ctx.layer_painter(egui::LayerId::new(egui::Order::Middle,egui::Id::new("full-profile-backdrop")));
         crate::identity::vertical_gradient(&backdrop,screen,top,bottom,0.);
-        if let Some(url)=banner_url.clone(){if let Some(texture)=self.images.texture_sized(&url,screen.size(),ctx){let uv=crate::identity::cover_uv(self.images.dimensions(&url,screen.size(),ctx).unwrap_or(screen.size()),screen.size());backdrop.image(texture,screen,uv,Color32::from_gray(120));}}
+        if let Some(url)=banner_url.clone(){if let Some(texture)=self.images.texture_hover(&url,screen,ctx){let uv=crate::identity::cover_uv(self.images.dimensions(&url,screen.size(),ctx).unwrap_or(screen.size()),screen.size());backdrop.image(texture,screen,uv,Color32::from_gray(120));}}
         let size=Vec2::new((screen.width()-80.).clamp(560.,960.),(screen.height()-80.).clamp(420.,700.));
         let left=(size.x*0.44).min(400.);
         let mut close=false;let mut message=false;let mut call=false;let mut open_other=None;
