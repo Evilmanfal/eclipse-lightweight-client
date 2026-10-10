@@ -1,5 +1,6 @@
 # Unreleased
 
+- Conversations open instantly more often: hovering a channel, DM or group chat loads its latest messages in the background (like Discord), your five most recent DMs load right after sign-in, and the last 30 conversations stay in memory instead of 6. Messages are never written to disk.
 - Avatars, server icons, decorations and nameplates appear much sooner: pictures are kept on disk between launches (%LOCALAPPDATA%\Eclipse\image-cache, up to 300 MB) and load from there instantly, and eight downloads run at once over shared connections instead of three.
 - Unread direct messages appear under Home on the server rail like Discord: the person's avatar with a red unread count (up to 99+), newest first; click one to open that conversation.
 - After sending a message the message box stays ready to type the next one (it lost focus while the message was sending).

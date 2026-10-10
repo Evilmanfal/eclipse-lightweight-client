@@ -1,8 +1,9 @@
 //! Small session-only navigation cache. Gateway invalidation prevents stale revisits.
 use crate::model::{Channel,Message};
 use std::collections::VecDeque;
-const HISTORY_COUNT:usize=6;
-const HISTORY_BYTES:usize=2*1024*1024;
+// Enough recent conversations that switching back and forth (and hover prefetching) is instant.
+const HISTORY_COUNT:usize=30;
+const HISTORY_BYTES:usize=12*1024*1024;
 #[derive(Default)] pub struct Cache {
     histories:VecDeque<(String,VecDeque<Message>,bool,usize)>,
     guilds:VecDeque<(String,Vec<Channel>)>,
@@ -21,6 +22,7 @@ impl Cache {
         self.histories.push_back((id.into(),messages,older,bytes));
     }
     pub fn get(&mut self,id:&str)->Option<(VecDeque<Message>,bool)>{let index=self.histories.iter().position(|e|e.0==id)?;let entry=self.histories.remove(index)?;let value=(entry.1.clone(),entry.2);self.histories.push_back(entry);Some(value)}
+    pub fn has(&self,id:&str)->bool{self.histories.iter().any(|e|e.0==id)}
     pub fn invalidate(&mut self,id:&str){self.histories.retain(|e|e.0!=id);}
     pub fn receive(&mut self,m:Message){if let Some(index)=self.histories.iter().position(|e|e.0==m.channel_id){let(id,mut messages,older,_)=self.histories.remove(index).unwrap();crate::model::merge_message(&mut messages,m);self.save(&id,&messages,older);}}
     pub fn save_channels(&mut self,id:&str,channels:&[Channel]){self.invalidate_channels(id);if channels.len()>500{return;}while self.guilds.len()>=12||self.guilds.iter().map(|e|e.1.len()).sum::<usize>()+channels.len()>2000{self.guilds.pop_front();}self.guilds.push_back((id.into(),channels.to_vec()));}
@@ -43,5 +45,5 @@ pub fn sort_dms(channels: &mut [Channel]) {
         assert_eq!(channels.iter().map(|c|c.id.as_str()).collect::<Vec<_>>(),["newest","middle","older","empty"]);
     }
     #[test]fn revisits_keep_latest_messages_and_invalidation_drops_stale_history(){let mut c=Cache::default();let m=Message{id:"1".into(),channel_id:"chat".into(),content:"before".into(),..Default::default()};c.save("chat",&VecDeque::from([m.clone()]),true);let mut edited=m;edited.content="after".into();c.receive(edited);assert_eq!(c.get("chat").unwrap().0[0].content,"after");c.invalidate("chat");assert!(c.get("chat").is_none());}
-    #[test]fn caches_are_bounded_and_guilds_stay_separate(){let mut c=Cache::default();for n in 0..30{c.save(&n.to_string(),&VecDeque::new(),false);c.save_channels(&n.to_string(),&[Channel{id:n.to_string(),..Default::default()}]);}assert_eq!(c.histories.len(),6);assert_eq!(c.guilds.len(),12);assert!(c.get("0").is_none());assert_eq!(c.channels("29").unwrap()[0].id,"29");c.invalidate_channels("29");assert!(c.channels("29").is_none());}
+    #[test]fn caches_are_bounded_and_guilds_stay_separate(){let mut c=Cache::default();for n in 0..40{c.save(&n.to_string(),&VecDeque::new(),false);c.save_channels(&n.to_string(),&[Channel{id:n.to_string(),..Default::default()}]);}assert_eq!(c.histories.len(),HISTORY_COUNT);assert_eq!(c.guilds.len(),12);assert!(c.get("0").is_none());assert_eq!(c.channels("39").unwrap()[0].id,"39");c.invalidate_channels("39");assert!(c.channels("39").is_none());}
 }

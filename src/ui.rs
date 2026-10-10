@@ -154,6 +154,9 @@ pub struct Eclipse {
     server_emojis: HashMap<String, (String, Vec<crate::media_picker::CustomEmoji>)>,
     /// When each stream preview picture was last asked for, by stream key.
     stream_preview_fetched: HashMap<String, Instant>,
+    /// Conversations loaded ahead of opening (hover and recent DMs), and when.
+    prefetched: HashMap<String, Instant>,
+    dms_prefetched: bool,
     /// Put the cursor in the message box next frame (after Reply).
     focus_message_box: bool,
     updater: crate::updater::Updater,
@@ -269,7 +272,7 @@ impl Eclipse {
             picker: Default::default(),
             calls: crate::calls::Calls::new(ctx.clone()),
             applied_prefs:prefs.clone(),prefs,prefs_save_at:None,home:Home::Chat,
-            settings_page:"Account & Profile".into(),settings_search:String::new(),server_settings:false,server_page:"Overview".into(),server:Default::default(),features:HashMap::new(),feature_errors:HashMap::new(),feature_pending:HashSet::new(),account_edit:serde_json::Value::Null,settings_edit:serde_json::Value::Null,server_edit:serde_json::Value::Null,role_edit:None,profile:None,friends:vec![],friend_filter:"Online".into(),friend_search:String::new(),friend_add:String::new(),member_search:String::new(),reply:None,logs:VecDeque::new(),profile_anchor:None,profile_guild:None,profile_just_opened:false,voice_revealed:None,shop_filter:"All".into(),quest_filter:"Discover".into(),spotify:None,game_activity:true,read_latest:HashMap::new(),confirm:None,hotkey_record:None,audio_devices:None,last_typing:None,composer_ime:false,mention_open:false,mention_pick:0,mention_ids:HashMap::new(),mention_query:String::new(),server_emojis:HashMap::new(),stream_preview_fetched:HashMap::new(),focus_message_box:false,updater:Default::default(),
+            settings_page:"Account & Profile".into(),settings_search:String::new(),server_settings:false,server_page:"Overview".into(),server:Default::default(),features:HashMap::new(),feature_errors:HashMap::new(),feature_pending:HashSet::new(),account_edit:serde_json::Value::Null,settings_edit:serde_json::Value::Null,server_edit:serde_json::Value::Null,role_edit:None,profile:None,friends:vec![],friend_filter:"Online".into(),friend_search:String::new(),friend_add:String::new(),member_search:String::new(),reply:None,logs:VecDeque::new(),profile_anchor:None,profile_guild:None,profile_just_opened:false,voice_revealed:None,shop_filter:"All".into(),quest_filter:"Discover".into(),spotify:None,game_activity:true,read_latest:HashMap::new(),confirm:None,hotkey_record:None,audio_devices:None,last_typing:None,composer_ime:false,mention_open:false,mention_pick:0,mention_ids:HashMap::new(),mention_query:String::new(),server_emojis:HashMap::new(),stream_preview_fetched:HashMap::new(),prefetched:HashMap::new(),dms_prefetched:false,focus_message_box:false,updater:Default::default(),
         };
         app.calls.configure(&app.prefs);
         app.images.playback_options(app.prefs.animations&&!app.prefs.reduced_motion,app.prefs.animation_fps);
@@ -480,6 +483,23 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             self.send_gateway(serde_json::json!({"op":37,"d":{"subscriptions":{guild:{"typing":true,"threads":false,"activities":true,"member_updates":false,"members":[],"channels":{channel:[[0,99]]},"thread_member_lists":[]}}}}));
         }
     }
+    /// Fetches a conversation's latest messages into the navigation cache ahead of opening it,
+    /// at most once a minute per conversation.
+    fn prefetch_history(&mut self, channel: &str) {
+        // Cached conversations are already kept current by live messages.
+        if self.preview || self.channel.as_ref().is_some_and(|c| c.id == channel) || self.navigation.has(channel) { return; }
+        if self.prefetched.get(channel).is_some_and(|at| at.elapsed() < Duration::from_secs(60)) { return; }
+        if self.prefetched.len() > 500 { self.prefetched.clear(); }
+        self.prefetched.insert(channel.to_owned(), Instant::now());
+        self.send_command(Command::History(channel.to_owned(), None));
+    }
+    /// After sign-in, the five most recent DMs and group chats load in the background.
+    fn prefetch_recent_dms(&mut self) {
+        if self.dms_prefetched || self.preview || self.dms.is_empty() { return; }
+        self.dms_prefetched = true;
+        let recent: Vec<String> = self.dms.iter().filter(|c| matches!(c.kind, 1 | 3)).take(5).map(|c| c.id.clone()).collect();
+        for id in recent { self.prefetch_history(&id); }
+    }
     fn select_channel(&mut self, channel: Channel) {
         if self.calls.active() && channel.kind != 2 { self.calls.chat = true; }
         self.home=Home::Chat;
@@ -639,7 +659,8 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                 }
                 Event::History(channel, messages, older) => {
                     if !self.channel.as_ref().is_some_and(|c|c.id==channel)&&!older{let has_older=messages.len()==50;self.navigation.save(&channel,&history(messages.clone()),has_older);}
-                    if let Some(guild) = self.guild.clone() {
+                    // Prefetched conversations only fill the cache; members are looked up when opened.
+                    if let Some(guild) = self.guild.clone().filter(|_| self.channel.as_ref().is_some_and(|c| c.id == channel)) {
                         let users: HashSet<_> =
                             messages.iter().map(|m| m.author.id.clone()).collect();
                         self.send_gateway(serde_json::json!({"op":8,"d":{"guild_id":guild,"user_ids":users.into_iter().take(100).collect::<Vec<_>>(),"presences":true}}));
@@ -1429,6 +1450,8 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                                     )
                                 };
                                 response.context_menu(|ui|self.channel_menu(ui,&channel));
+                                // Like Discord: hovering a conversation loads it, so opening it is instant.
+                                if response.hovered() && (channel.is_text() || self.guild.is_none()) {self.prefetch_history(&channel.id);}
                                 if matches!(channel.kind,2|13) {self.voice_drop_target(ui,&response,&channel);}
                                 if selected {
                                     let rect = response.rect;
@@ -2178,6 +2201,7 @@ impl eframe::App for Eclipse {
                     });
                 });
             }); }
+        if self.user.is_some() { self.prefetch_recent_dms(); }
         if self.user.is_none() {
             self.login(ctx);
         } else if full {
@@ -2542,6 +2566,18 @@ mod interaction_tests {
         app.home=Home::Chat;app.guild=None;app.channels=app.dms.clone();app.select_channel(dm("d1","newest"));
         assert!(app.channel.as_ref().is_some_and(|c|c.id=="d1"));
         assert!(!app.unread_dms().iter().any(|c|c.id=="d1"));
+    }
+    #[test]fn hovering_a_conversation_loads_it_once_and_opening_it_is_then_instant(){
+        let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);app.preview=false;
+        let dm=Channel{id:"d9".into(),kind:1,..Default::default()};
+        app.prefetch_history("d9");assert!(app.prefetched.contains_key("d9"),"hovering asks for the latest messages");
+        let first=app.prefetched["d9"];app.prefetch_history("d9");assert_eq!(app.prefetched["d9"],first,"not asked again within a minute");
+        // The answer arrives while another conversation is open: it fills the cache.
+        let message=Message{id:"5".into(),channel_id:"d9".into(),content:"hey".into(),..Default::default()};
+        app.navigation.save("d9",&std::collections::VecDeque::from(vec![message]),false);
+        assert!(app.navigation.has("d9"));
+        app.guild=None;app.select_channel(dm);
+        assert!(app.loaded&&app.messages.iter().any(|m|m.content=="hey"),"opening shows the messages at once instead of Loading messages…");
     }
     fn composer_frame(ctx:&egui::Context,app:&mut Eclipse,channel:&Channel,events:Vec<egui::Event>)->egui::FullOutput{ctx.run(input(events),|ctx|{egui::CentralPanel::default().show(ctx,|ui|{app.composer(ui,ctx,channel);});})}
     #[test]fn typing_at_lists_members_and_enter_inserts_a_mention_sent_as_an_id(){
