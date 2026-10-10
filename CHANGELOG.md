@@ -1,5 +1,6 @@
 # Unreleased
 
+- Unread direct messages appear under Home on the server rail like Discord: the person's avatar with a red unread count (up to 99+), newest first; click one to open that conversation.
 - After sending a message the message box stays ready to type the next one (it lost focus while the message was sending).
 - The Emoji and GIF panels share one fixed, larger size; opening GIFs no longer left the emoji panel small and stuck.
 - The GIF panel opens on Discord-style category tiles (Trending GIFs, then trending topics) with moving previews; clicking one shows its GIFs, and ← Categories goes back. GIFs show as larger two-column tiles.

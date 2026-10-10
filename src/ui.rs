@@ -367,6 +367,7 @@ impl Eclipse {
             "update-button"=>self.updater.preview(true),
             "inline-edit"=>{if let (Some(user),Some(message))=(self.user.clone(),self.messages.back_mut()){message.author=user;let message=message.clone();self.start_edit(&message);}},
             "mentions"=>{if let Some(channel)=self.channel.clone(){self.drafts.insert(channel.id.clone(),"@".into());self.focus_message_box=true;}},
+            "unread-dms"=>{for (dm,count) in self.dms.iter().zip([3usize,128]){self.unread.insert(dm.id.clone(),count);}},
             "zoom-in"=>self.prefs.zoom=1.5,
             "zoom-out"=>self.prefs.zoom=0.75,
             "compact"=>self.prefs.compact=true,
@@ -933,6 +934,8 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     if moon_button(ui,self.guild.is_none()).on_hover_text("Direct messages").clicked() {
                         self.navigate_home(Home::Friends);
                     }
+                    // Unread direct messages sit under Home with their count, like Discord.
+                    for dm in self.unread_dms() { ui.add_space(4.0); self.unread_dm_button(ui, &dm); }
                     if self.prefs.read_all { ui.add_space(6.); if crate::widgets::read_all(ui).clicked() { self.read_all(); } }
                     ui.add_space(4.0);
                     ui.separator();
@@ -1117,6 +1120,36 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
         crate::identity::paint_art_playing(ui,&mut self.images,rect.expand(size*0.1),crate::identity::decoration(&decorated),0);
         if show_status{crate::presence::badge(ui, rect, status);}
         if show_status{response.on_hover_text(status.label())}else{response}
+    }
+    /// DMs and group DMs with unread messages, newest first (the open one excluded), at most six.
+    fn unread_dms(&self) -> Vec<Channel> {
+        let open = self.channel.as_ref().filter(|_| self.guild.is_none() && self.home == Home::Chat).map(|c| c.id.as_str());
+        self.dms.iter().filter(|c| matches!(c.kind, 1 | 3) && Some(c.id.as_str()) != open && self.unread.get(&c.id).copied().unwrap_or(0) > 0).take(6).cloned().collect()
+    }
+    /// One unread DM on the server rail: their avatar with a red unread count; opens the DM.
+    fn unread_dm_button(&mut self, ui: &mut egui::Ui, dm: &Channel) {
+        let (_, response) = ui.allocate_exact_size(Vec2::splat(44.0), egui::Sense::click());
+        let hover = ui.ctx().animate_bool_with_time(egui::Id::new(("dm-hover", &dm.id)), response.hovered(), if self.prefs.reduced_motion { 0.0 } else { 0.12 });
+        let rect = response.rect.expand(2.0 * hover);
+        let person = dm.recipients.first().cloned().unwrap_or_default();
+        ui.painter().rect_filled(rect, 22, CARD);
+        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, initials_of(&dm.label()), egui::FontId::proportional(14.0), MUTED);
+        let url = if self.preview { Some(format!("demo://user/{}", person.id)) } else { assets::avatar_url(&person, None, None) };
+        self.paint_image(ui, rect, url, 22);
+        let count = self.unread.get(&dm.id).copied().unwrap_or(0);
+        let text = if count > 99 { "99+".to_owned() } else { count.to_string() };
+        let galley = ui.painter().layout_no_wrap(text, egui::FontId::proportional(11.0), Color32::WHITE);
+        let badge = egui::Rect::from_min_size(rect.right_bottom() - Vec2::new(galley.size().x.max(8.0) + 8.0, 16.0) + Vec2::new(3.0, 3.0), Vec2::new(galley.size().x.max(8.0) + 8.0, 16.0));
+        ui.painter().rect_filled(badge.expand(2.5), 10, RAIL);
+        ui.painter().rect_filled(badge, 8, Color32::from_rgb(242, 63, 67));
+        ui.painter().galley(badge.center() - galley.size() / 2.0, galley, Color32::WHITE);
+        let response = response.on_hover_text(format!("{} · {count} unread", dm.label())).on_hover_cursor(egui::CursorIcon::PointingHand);
+        if response.clicked() {
+            self.home = Home::Chat;
+            self.guild = None;
+            self.channels = self.dms.clone();
+            self.select_channel(dm.clone());
+        }
     }
     fn guild_button(&mut self, ui: &mut egui::Ui, guild: &Guild) {
         let selected = self.guild.as_deref() == Some(&guild.id);
@@ -2497,6 +2530,18 @@ mod interaction_tests {
         assert_eq!(servers.len(),1,"the current server is not repeated");
         assert_eq!(servers[0].0,"Gaming");assert_eq!(servers[0].1.iter().map(|e|e.token()).collect::<Vec<_>>(),["<a:pog:2>","<:gg:3>"]);
         app.guild=None;assert_eq!(app.nitro_emojis().len(),2,"in DMs every server's emojis are offered");
+    }
+    #[test]fn unread_dms_appear_on_the_rail_newest_first_and_open_their_conversation(){
+        let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);
+        let dm=|id:&str,name:&str|Channel{id:id.into(),kind:1,recipients:vec![User{id:format!("u{id}"),username:name.into(),..Default::default()}],..Default::default()};
+        app.dms=vec![dm("d1","newest"),dm("d2","older"),dm("d3","read")];
+        app.unread.insert("d1".into(),3);app.unread.insert("d2".into(),1);
+        assert_eq!(app.unread_dms().iter().map(|c|c.id.as_str()).collect::<Vec<_>>(),["d1","d2"],"only unread DMs, newest first");
+        app.unread.insert("d1".into(),250);let _=ctx.run(input(vec![]),|ctx|{egui::CentralPanel::default().show(ctx,|ui|{app.unread_dm_button(ui,&dm("d1","newest"));});});
+        // Opening one takes you to that conversation, and it leaves the rail.
+        app.home=Home::Chat;app.guild=None;app.channels=app.dms.clone();app.select_channel(dm("d1","newest"));
+        assert!(app.channel.as_ref().is_some_and(|c|c.id=="d1"));
+        assert!(!app.unread_dms().iter().any(|c|c.id=="d1"));
     }
     fn composer_frame(ctx:&egui::Context,app:&mut Eclipse,channel:&Channel,events:Vec<egui::Event>)->egui::FullOutput{ctx.run(input(events),|ctx|{egui::CentralPanel::default().show(ctx,|ui|{app.composer(ui,ctx,channel);});})}
     #[test]fn typing_at_lists_members_and_enter_inserts_a_mention_sent_as_an_id(){
