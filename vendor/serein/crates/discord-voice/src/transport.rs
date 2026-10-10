@@ -343,6 +343,7 @@ async fn run_inner(
 	let mut udp: Option<UdpSocket> = None;
 	let mut next_udp_ping = Instant::now();
 	let mut udp_ping_sequence = 0;
+	let mut udp_ping_sent = Instant::now();
 	let mut udp_failures = UdpFailures::default();
 	let mut discovering = false;
 	let mut discovery_deadline = Instant::now();
@@ -356,6 +357,7 @@ async fn run_inner(
 	let mut heartbeat_ms: Option<u64> = None;
 	let mut heartbeat_at = Instant::now();
 	let mut awaiting_ack = None;
+	let mut heartbeat_sent = Instant::now();
 	let mut heartbeat_nonce = 0u64;
 	let mut deadline = Some(Instant::now() + Duration::from_secs(90));
 	let mut ready_announced = false;
@@ -405,13 +407,14 @@ async fn run_inner(
 				if discovering && now>=discovery_deadline {return Err("Discord voice UDP discovery timed out; check the network firewall");}
 				if !discovering && now>=next_udp_ping && let Some(socket)=&udp {
 					udp_keepalive(socket,&mut udp_failures,&mut udp_ping_sequence)?;
+					udp_ping_sent=Instant::now();
 					next_udp_ping=now+Duration::from_secs(5);
 				}
 				if let Some(interval)=heartbeat_ms && now>=heartbeat_at {
 					if awaiting_ack.is_some() {return Err("Discord voice heartbeat was not acknowledged; rejoin the call");}
 					heartbeat_nonce=heartbeat_nonce.wrapping_add(1);
 					json_send(&mut ws,json!({"op":3,"d":{"t":heartbeat_nonce,"seq_ack":seq_ack}})).await?;
-					awaiting_ack=Some(heartbeat_nonce);heartbeat_at=now+Duration::from_millis(interval);
+					awaiting_ack=Some(heartbeat_nonce);heartbeat_at=now+Duration::from_millis(interval);heartbeat_sent=now;
 				}
 				if secured_at.is_some_and(|at| now>=at+PEER_GRACE) && !discovering && !resuming && dave.should_wait_for_peer() {dave.enter_sole_member_waiting()?;}
 				let enabled=dave.ready && encryption.is_some() && !discovering && !resuming;
@@ -521,6 +524,13 @@ async fn run_inner(
 			},
 			result=async {match &udp {Some(socket)=>socket.recv(&mut packet).await,None=>std::future::pending().await}}=>{
 				let length=match result {Ok(length)=>length,Err(error) if transient_receive(&error)=>continue,Err(_)=>return Err("Voice UDP receive failed")};
+				// Eclipse: the voice server echoes our UDP keepalive; its round trip is the call's ping.
+				if length==8 && packet[..4]==[0x13,0x37,0xca,0xfe] {
+					if u32::from_le_bytes([packet[4],packet[5],packet[6],packet[7]])==udp_ping_sequence {
+						emit(Status::Ping(udp_ping_sent.elapsed().as_millis().min(60_000) as u32)).map_err(|_|"Call interface closed")?;
+					}
+					continue;
+				}
 				if length>MAX_PACKET {continue;}
 				if discovering {
 					let (address,port)=discovery(&packet[..length],ssrc)?;
@@ -585,7 +595,8 @@ async fn run_inner(
 								if !(100..=120000).contains(&interval) || heartbeat_ms.is_some(){return Err("Invalid voice heartbeat negotiation");}
 								heartbeat_ms=Some(interval.min(5000));heartbeat_at=Instant::now();
 							},
-							6=>{if awaiting_ack.is_none() || data["t"].as_u64()!=awaiting_ack {return Err("Invalid voice heartbeat acknowledgement");}awaiting_ack=None;},
+							6=>{if awaiting_ack.is_none() || data["t"].as_u64()!=awaiting_ack {return Err("Invalid voice heartbeat acknowledgement");}awaiting_ack=None;
+								emit(Status::Ping(heartbeat_sent.elapsed().as_millis().min(60_000) as u32)).map_err(|_|"Call interface closed")?;},
 							2=>{
 								if udp.is_some(){return Err("Unexpected voice transport replacement; rejoin the call");}
 								ssrc=u32::try_from(number(data,"ssrc")?).map_err(|_|"Invalid voice SSRC")?;
@@ -2086,7 +2097,8 @@ mod tests {
 			Some(camera_rx),
 			None,
 			None,
-			move |status| status_tx.try_send(status).map_err(|_| ()),
+			// Ping reports arrive whenever the fixture answers a heartbeat; these tests check order.
+			move |status| if matches!(status, Status::Ping(_)) { Ok(()) } else { status_tx.try_send(status).map_err(|_| ()) },
 			Identity::generate(),
 			format!("ws://{address}"),
 			true,
@@ -2138,7 +2150,7 @@ mod tests {
 							if let Some(sender) = waiting_tx.take() { sender.send(()).unwrap(); }
 						}
 						Status::Connecting | Status::Discovering | Status::Securing
-						| Status::TransportReady | Status::Speaking(_) | Status::CameraAvailable(_) => {}
+						| Status::TransportReady | Status::Speaking(_) | Status::CameraAvailable(_) | Status::Ping(_) => {}
 					},
 					result = &mut captured_rx, if !captured => {
 						result.unwrap();
@@ -2343,7 +2355,8 @@ mod tests {
 			Some(camera_rx),
 			None,
 			None,
-			move |status| status_tx.try_send(status).map_err(|_| ()),
+			// Ping reports arrive whenever the fixture answers a heartbeat; these tests check order.
+			move |status| if matches!(status, Status::Ping(_)) { Ok(()) } else { status_tx.try_send(status).map_err(|_| ()) },
 			Identity::generate(),
 			format!("ws://{address}"),
 			true,

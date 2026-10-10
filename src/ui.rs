@@ -150,6 +150,13 @@ pub struct Eclipse {
     mention_pick: usize,
     mention_ids: HashMap<String, String>,
     mention_query: String,
+    /// Custom emojis of every server you are in, by server id: (server name, emojis).
+    server_emojis: HashMap<String, (String, Vec<crate::media_picker::CustomEmoji>)>,
+    /// When each stream preview picture was last asked for, by stream key.
+    stream_preview_fetched: HashMap<String, Instant>,
+    /// Conversations loaded ahead of opening (hover and recent DMs), and when.
+    prefetched: HashMap<String, Instant>,
+    dms_prefetched: bool,
     /// Put the cursor in the message box next frame (after Reply).
     focus_message_box: bool,
     updater: crate::updater::Updater,
@@ -265,7 +272,7 @@ impl Eclipse {
             picker: Default::default(),
             calls: crate::calls::Calls::new(ctx.clone()),
             applied_prefs:prefs.clone(),prefs,prefs_save_at:None,home:Home::Chat,
-            settings_page:"Account & Profile".into(),settings_search:String::new(),server_settings:false,server_page:"Overview".into(),server:Default::default(),features:HashMap::new(),feature_errors:HashMap::new(),feature_pending:HashSet::new(),account_edit:serde_json::Value::Null,settings_edit:serde_json::Value::Null,server_edit:serde_json::Value::Null,role_edit:None,profile:None,friends:vec![],friend_filter:"Online".into(),friend_search:String::new(),friend_add:String::new(),member_search:String::new(),reply:None,logs:VecDeque::new(),profile_anchor:None,profile_guild:None,profile_just_opened:false,voice_revealed:None,shop_filter:"All".into(),quest_filter:"Discover".into(),spotify:None,game_activity:true,read_latest:HashMap::new(),confirm:None,hotkey_record:None,audio_devices:None,last_typing:None,composer_ime:false,mention_open:false,mention_pick:0,mention_ids:HashMap::new(),mention_query:String::new(),focus_message_box:false,updater:Default::default(),
+            settings_page:"Account & Profile".into(),settings_search:String::new(),server_settings:false,server_page:"Overview".into(),server:Default::default(),features:HashMap::new(),feature_errors:HashMap::new(),feature_pending:HashSet::new(),account_edit:serde_json::Value::Null,settings_edit:serde_json::Value::Null,server_edit:serde_json::Value::Null,role_edit:None,profile:None,friends:vec![],friend_filter:"Online".into(),friend_search:String::new(),friend_add:String::new(),member_search:String::new(),reply:None,logs:VecDeque::new(),profile_anchor:None,profile_guild:None,profile_just_opened:false,voice_revealed:None,shop_filter:"All".into(),quest_filter:"Discover".into(),spotify:None,game_activity:true,read_latest:HashMap::new(),confirm:None,hotkey_record:None,audio_devices:None,last_typing:None,composer_ime:false,mention_open:false,mention_pick:0,mention_ids:HashMap::new(),mention_query:String::new(),server_emojis:HashMap::new(),stream_preview_fetched:HashMap::new(),prefetched:HashMap::new(),dms_prefetched:false,focus_message_box:false,updater:Default::default(),
         };
         app.calls.configure(&app.prefs);
         app.images.playback_options(app.prefs.animations&&!app.prefs.reduced_motion,app.prefs.animation_fps);
@@ -356,12 +363,14 @@ impl Eclipse {
         if !self.preview{return;}
         match section {
             "timestamps"=>{self.messages.drain(..self.messages.len().saturating_sub(3));for(message,days)in self.messages.iter_mut().rev().zip(0..3){message.timestamp=crate::message_time::preview_timestamp(days);}},
-            "emoji"|"gifs"=>{if let Some(channel)=&self.channel{self.picker.open(if section=="emoji"{crate::media_picker::Mode::Emoji}else{crate::media_picker::Mode::Gif},&channel.id,self.guild.as_deref(),egui::Rect::from_min_size(egui::pos2(960.,780.),Vec2::splat(30.)));}},
+            "emoji"|"gifs"=>{if let Some(channel)=&self.channel{self.picker.open(if section=="emoji"{crate::media_picker::Mode::Emoji}else{crate::media_picker::Mode::Gif},&channel.id,self.guild.as_deref(),egui::Rect::from_min_size(egui::pos2(960.,780.),Vec2::splat(30.)));}if section=="gifs"{self.picker.set_categories([crate::media_picker::TRENDING,"hello","lol","love","happy birthday","thank you"].iter().map(|n|(n.to_string(),String::new())).collect());}},
+
             "link-preview"=>{if let (Some(user),Some(last))=(self.user.clone(),self.messages.back().cloned()){let link="https://stremio-addons.net/addons/magnetflix";let mut message=Message{id:"link-preview".into(),author:user,content:link.into(),..last};message.referenced_message=None;message.reactions.clear();message.attachments.clear();message.embeds=vec![crate::model::Embed{kind:"rich".into(),title:Some("Magnetflix".into()),description:Some("Addon de filmes, séries e animes dublados e legendados em Português (PT-BR)".into()),url:Some(link.into()),color:Some(0xb06cf0),provider:Some(crate::model::EmbedName{name:Some("Stremio Addons".into()),url:None}),..Default::default()}];self.messages.push_back(message);}},
             "update-prompt"=>self.updater.preview(false),
             "update-button"=>self.updater.preview(true),
             "inline-edit"=>{if let (Some(user),Some(message))=(self.user.clone(),self.messages.back_mut()){message.author=user;let message=message.clone();self.start_edit(&message);}},
             "mentions"=>{if let Some(channel)=self.channel.clone(){self.drafts.insert(channel.id.clone(),"@".into());self.focus_message_box=true;}},
+            "unread-dms"=>{for (dm,count) in self.dms.iter().zip([3usize,128]){self.unread.insert(dm.id.clone(),count);}},
             "zoom-in"=>self.prefs.zoom=1.5,
             "zoom-out"=>self.prefs.zoom=0.75,
             "compact"=>self.prefs.compact=true,
@@ -474,6 +483,23 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             self.send_gateway(serde_json::json!({"op":37,"d":{"subscriptions":{guild:{"typing":true,"threads":false,"activities":true,"member_updates":false,"members":[],"channels":{channel:[[0,99]]},"thread_member_lists":[]}}}}));
         }
     }
+    /// Fetches a conversation's latest messages into the navigation cache ahead of opening it,
+    /// at most once a minute per conversation.
+    fn prefetch_history(&mut self, channel: &str) {
+        // Cached conversations are already kept current by live messages.
+        if self.preview || self.channel.as_ref().is_some_and(|c| c.id == channel) || self.navigation.has(channel) { return; }
+        if self.prefetched.get(channel).is_some_and(|at| at.elapsed() < Duration::from_secs(60)) { return; }
+        if self.prefetched.len() > 500 { self.prefetched.clear(); }
+        self.prefetched.insert(channel.to_owned(), Instant::now());
+        self.send_command(Command::History(channel.to_owned(), None));
+    }
+    /// After sign-in, the five most recent DMs and group chats load in the background.
+    fn prefetch_recent_dms(&mut self) {
+        if self.dms_prefetched || self.preview || self.dms.is_empty() { return; }
+        self.dms_prefetched = true;
+        let recent: Vec<String> = self.dms.iter().filter(|c| matches!(c.kind, 1 | 3)).take(5).map(|c| c.id.clone()).collect();
+        for id in recent { self.prefetch_history(&id); }
+    }
     fn select_channel(&mut self, channel: Channel) {
         if self.calls.active() && channel.kind != 2 { self.calls.chat = true; }
         self.home=Home::Chat;
@@ -569,6 +595,9 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         self.picker.emojis = emojis;
                     }
                 }
+                Event::GifCategories(categories) => {
+                    self.picker.set_categories(categories);
+                }
                 Event::Gifs(query, gifs) => {
                     if self.picker.requested == query {
                         self.picker.pending = false;
@@ -630,7 +659,8 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                 }
                 Event::History(channel, messages, older) => {
                     if !self.channel.as_ref().is_some_and(|c|c.id==channel)&&!older{let has_older=messages.len()==50;self.navigation.save(&channel,&history(messages.clone()),has_older);}
-                    if let Some(guild) = self.guild.clone() {
+                    // Prefetched conversations only fill the cache; members are looked up when opened.
+                    if let Some(guild) = self.guild.clone().filter(|_| self.channel.as_ref().is_some_and(|c| c.id == channel)) {
                         let users: HashSet<_> =
                             messages.iter().map(|m| m.author.id.clone()).collect();
                         self.send_gateway(serde_json::json!({"op":8,"d":{"guild_id":guild,"user_ids":users.into_iter().take(100).collect::<Vec<_>>(),"presences":true}}));
@@ -925,6 +955,8 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     if moon_button(ui,self.guild.is_none()).on_hover_text("Direct messages").clicked() {
                         self.navigate_home(Home::Friends);
                     }
+                    // Unread direct messages sit under Home with their count, like Discord.
+                    for dm in self.unread_dms() { ui.add_space(4.0); self.unread_dm_button(ui, &dm); }
                     if self.prefs.read_all { ui.add_space(6.); if crate::widgets::read_all(ui).clicked() { self.read_all(); } }
                     ui.add_space(4.0);
                     ui.separator();
@@ -1109,6 +1141,36 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
         crate::identity::paint_art_playing(ui,&mut self.images,rect.expand(size*0.1),crate::identity::decoration(&decorated),0);
         if show_status{crate::presence::badge(ui, rect, status);}
         if show_status{response.on_hover_text(status.label())}else{response}
+    }
+    /// DMs and group DMs with unread messages, newest first (the open one excluded), at most six.
+    fn unread_dms(&self) -> Vec<Channel> {
+        let open = self.channel.as_ref().filter(|_| self.guild.is_none() && self.home == Home::Chat).map(|c| c.id.as_str());
+        self.dms.iter().filter(|c| matches!(c.kind, 1 | 3) && Some(c.id.as_str()) != open && self.unread.get(&c.id).copied().unwrap_or(0) > 0).take(6).cloned().collect()
+    }
+    /// One unread DM on the server rail: their avatar with a red unread count; opens the DM.
+    fn unread_dm_button(&mut self, ui: &mut egui::Ui, dm: &Channel) {
+        let (_, response) = ui.allocate_exact_size(Vec2::splat(44.0), egui::Sense::click());
+        let hover = ui.ctx().animate_bool_with_time(egui::Id::new(("dm-hover", &dm.id)), response.hovered(), if self.prefs.reduced_motion { 0.0 } else { 0.12 });
+        let rect = response.rect.expand(2.0 * hover);
+        let person = dm.recipients.first().cloned().unwrap_or_default();
+        ui.painter().rect_filled(rect, 22, CARD);
+        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, initials_of(&dm.label()), egui::FontId::proportional(14.0), MUTED);
+        let url = if self.preview { Some(format!("demo://user/{}", person.id)) } else { assets::avatar_url(&person, None, None) };
+        self.paint_image(ui, rect, url, 22);
+        let count = self.unread.get(&dm.id).copied().unwrap_or(0);
+        let text = if count > 99 { "99+".to_owned() } else { count.to_string() };
+        let galley = ui.painter().layout_no_wrap(text, egui::FontId::proportional(11.0), Color32::WHITE);
+        let badge = egui::Rect::from_min_size(rect.right_bottom() - Vec2::new(galley.size().x.max(8.0) + 8.0, 16.0) + Vec2::new(3.0, 3.0), Vec2::new(galley.size().x.max(8.0) + 8.0, 16.0));
+        ui.painter().rect_filled(badge.expand(2.5), 10, RAIL);
+        ui.painter().rect_filled(badge, 8, Color32::from_rgb(242, 63, 67));
+        ui.painter().galley(badge.center() - galley.size() / 2.0, galley, Color32::WHITE);
+        let response = response.on_hover_text(format!("{} · {count} unread", dm.label())).on_hover_cursor(egui::CursorIcon::PointingHand);
+        if response.clicked() {
+            self.home = Home::Chat;
+            self.guild = None;
+            self.channels = self.dms.clone();
+            self.select_channel(dm.clone());
+        }
     }
     fn guild_button(&mut self, ui: &mut egui::Ui, guild: &Guild) {
         let selected = self.guild.as_deref() == Some(&guild.id);
@@ -1388,6 +1450,9 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                                     )
                                 };
                                 response.context_menu(|ui|self.channel_menu(ui,&channel));
+                                // Like Discord: hovering a conversation loads it, so opening it is instant.
+                                if response.hovered() && (channel.is_text() || self.guild.is_none()) {self.prefetch_history(&channel.id);}
+                                if matches!(channel.kind,2|13) {self.voice_drop_target(ui,&response,&channel);}
                                 if selected {
                                     let rect = response.rect;
                                     ui.painter().rect_filled(
@@ -1923,7 +1988,8 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         .desired_width((ui.available_width() - 154.0).max(60.0))
                         .frame(false);
                     let response = ui.add_enabled(!pending, edit);
-                    if self.focus_message_box{response.request_focus();self.focus_message_box=false;}
+                    // Waits while a message is sending: the box is disabled then and can't hold focus.
+                    if self.focus_message_box&&!pending{response.request_focus();self.focus_message_box=false;}
                     self.mention_popup(ctx, channel, &response, mention_keys);
                     let paste=response.has_focus()&&ctx.input(|i|i.focused)&&crate::clipboard::paste_keys_down();
                     if paste&&!self.paste_down{self.paste_attachment(&channel.id);}
@@ -1938,7 +2004,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     for (mode,kind,tooltip) in [(crate::media_picker::Mode::Gif,crate::widgets::Control::Gif,"Choose a GIF"),(crate::media_picker::Mode::Emoji,crate::widgets::Control::Emoji,"Choose an emoji")]{
                         let response=crate::widgets::control(ui,kind,self.picker.mode==Some(mode),30.,tooltip);
                         if self.picker.mode==Some(mode){self.picker.anchor=Some(response.rect);}
-                        if response.clicked(){if let Some(command)=self.picker.open(mode,&channel.id,self.guild.as_deref(),response.rect){if !self.preview{self.send_command(command);}}}
+                        if response.clicked(){if let Some(command)=self.picker.open(mode,&channel.id,self.guild.as_deref(),response.rect){if !self.preview{self.send_command(command);}}self.picker.other_servers=self.nitro_emojis();}
                     }
                     if ui
                         .add_enabled(
@@ -1961,6 +2027,8 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             });
         });
         if send {
+            // Ready for the next message as soon as this one is sent, without clicking the box.
+            self.focus_message_box = true;
             self.send_message(channel);
         }
     }
@@ -2133,6 +2201,7 @@ impl eframe::App for Eclipse {
                     });
                 });
             }); }
+        if self.user.is_some() { self.prefetch_recent_dms(); }
         if self.user.is_none() {
             self.login(ctx);
         } else if full {
@@ -2140,7 +2209,9 @@ impl eframe::App for Eclipse {
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(Color32::BLACK)).show(ctx,|ui|self.calls.stage(ui,&mut self.images));
         } else {
             self.left_column(ctx);
-            if self.home!=Home::Chat{self.home_panel(ctx);}else{self.conversation_header(ctx);if self.calls.active(){self.sync_call_roster();}if self.calls.active()&&!self.calls.chat{egui::CentralPanel::default().frame(egui::Frame::NONE.fill(preferences_bg(&self.prefs)).inner_margin(if self.compact{0}else{8})).show(ctx,|ui|self.calls.stage(ui,&mut self.images));}else{self.members(ctx);self.conversation(ctx);}}
+            if self.home!=Home::Chat{self.home_panel(ctx);}else{self.conversation_header(ctx);if self.calls.active(){self.sync_call_roster();}
+                if let Some(moved)=self.calls.moved_channel().map(str::to_owned){if let Some(channel)=self.channels.iter().find(|c|c.id==moved).cloned(){self.calls.set_moved_channel(channel);}}
+                if self.calls.active()&&!self.calls.chat{egui::CentralPanel::default().frame(egui::Frame::NONE.fill(preferences_bg(&self.prefs)).inner_margin(if self.compact{0}else{8})).show(ctx,|ui|self.calls.stage(ui,&mut self.images));}else{self.members(ctx);self.conversation(ctx);}}
         }
         self.dialogs(ctx);
         if self.home!=Home::Chat||self.settings||self.server_settings||self.channel.as_ref().is_none_or(|c|c.id!=self.picker.channel)||self.calls.active()&&!self.calls.chat{self.picker.close();}
@@ -2162,6 +2233,14 @@ impl eframe::App for Eclipse {
         }
         for command in self.calls.show(ctx, &mut self.images) {
             self.send_gateway(command);
+        }
+        // Remember Screen Share dialog choices, and send your stream's preview picture.
+        let (height, fps, preview) = self.calls.share_choices();
+        if (self.prefs.screen_height, self.prefs.screen_fps, self.prefs.stream_preview) != (height, fps, preview) {
+            (self.prefs.screen_height, self.prefs.screen_fps, self.prefs.stream_preview) = (height, fps, preview);
+        }
+        if let Some((key, thumbnail)) = self.calls.take_preview_upload() {
+            self.mutate("stream-preview-upload", reqwest::Method::POST, format!("/streams/{key}/preview"), Some(serde_json::json!({"thumbnail": thumbnail})));
         }
         if let Some(channel) = self.incoming_call.clone() {
             egui::Window::new("Incoming Discord call")
@@ -2438,6 +2517,68 @@ mod interaction_tests {
         frame(&mut app,&message,vec![egui::Event::Key{key:egui::Key::Escape,physical_key:None,pressed:true,repeat:false,modifiers:Default::default()}]);
         assert!(app.edit.is_none());
     }
+    #[test]fn voice_moderation_menu_sends_mute_and_disconnect_and_is_hidden_without_permission(){
+        let ctx=egui::Context::default();
+        let state=crate::voice_roster::VoiceState{user_id:"77".into(),server_muted:true,..Default::default()};
+        let destinations=vec![("9".to_owned(),"Lounge".to_owned())];
+        let run=|events:Vec<egui::Event>,allowed:bool|{let mut chosen=None;let output=ctx.run(input(events),|ctx|{egui::CentralPanel::default().show(ctx,|ui|{chosen=panels::voice_moderation_menu(ui,&state,allowed,allowed,allowed,&destinations);});});(chosen,output)};
+        let (_,output)=run(vec![],true);
+        let at=|label:&str|output.shapes.iter().find_map(|s|match &s.shape{egui::Shape::Text(t)if t.galley.job.text==label=>Some(t.visual_bounding_rect().center()),_=>None}).unwrap_or_else(||panic!("{label} shown"));
+        let (mute,disconnect)=(at("Server Mute"),at("Disconnect"));
+        let click=|pos|vec![egui::Event::PointerMoved(pos),egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed:true,modifiers:Default::default()},egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed:false,modifiers:Default::default()}];
+        assert_eq!(run(click(disconnect),true).0,Some(("77".to_owned(),serde_json::json!({"channel_id":null}))));
+        assert_eq!(run(click(mute),true).0,Some(("77".to_owned(),serde_json::json!({"mute":false}))),"server-muted, so the click unmutes");
+        let (chosen,output)=run(vec![],false);
+        assert!(chosen.is_none()&&!output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t)if t.galley.job.text=="Disconnect")),"no moderation without permission");
+    }
+    #[test]fn channels_created_or_deleted_by_a_bot_show_up_live(){
+        let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);
+        let guild=app.guild.clone().expect("sample server");
+        app.account_event("CHANNEL_CREATE",&serde_json::json!({"id":"9001","guild_id":guild,"type":2,"name":"Jason's channel","position":99}));
+        assert!(app.channels.iter().any(|c|c.id=="9001"&&c.kind==2),"a new voice channel appears without switching servers");
+        app.account_event("CHANNEL_DELETE",&serde_json::json!({"id":"9001","guild_id":guild,"type":2}));
+        assert!(!app.channels.iter().any(|c|c.id=="9001"));
+        app.account_event("CHANNEL_CREATE",&serde_json::json!({"id":"9002","guild_id":"another-server","type":2,"name":"elsewhere"}));
+        assert!(!app.channels.iter().any(|c|c.id=="9002"),"other servers' channels stay out of this list");
+    }
+    #[test]fn nitro_offers_every_servers_emojis_and_others_only_get_the_current_server(){
+        let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);
+        let current=app.guild.clone().expect("sample server");
+        app.account_event("GUILD_CREATE",&serde_json::json!({"id":current,"name":"Eclipse Lab","emojis":[{"id":"1","name":"here"}]}));
+        app.account_event("GUILD_CREATE",&serde_json::json!({"id":"700","name":"Gaming","emojis":[{"id":"2","name":"pog","animated":true}]}));
+        app.account_event("GUILD_EMOJIS_UPDATE",&serde_json::json!({"guild_id":"700","emojis":[{"id":"2","name":"pog","animated":true},{"id":"3","name":"gg"}]}));
+        if let Some(user)=app.user.as_mut(){user.premium_type=0;}
+        assert!(app.nitro_emojis().is_empty(),"without Nitro only the current server's emojis are offered");
+        if let Some(user)=app.user.as_mut(){user.premium_type=2;}
+        let servers=app.nitro_emojis();
+        assert_eq!(servers.len(),1,"the current server is not repeated");
+        assert_eq!(servers[0].0,"Gaming");assert_eq!(servers[0].1.iter().map(|e|e.token()).collect::<Vec<_>>(),["<a:pog:2>","<:gg:3>"]);
+        app.guild=None;assert_eq!(app.nitro_emojis().len(),2,"in DMs every server's emojis are offered");
+    }
+    #[test]fn unread_dms_appear_on_the_rail_newest_first_and_open_their_conversation(){
+        let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);
+        let dm=|id:&str,name:&str|Channel{id:id.into(),kind:1,recipients:vec![User{id:format!("u{id}"),username:name.into(),..Default::default()}],..Default::default()};
+        app.dms=vec![dm("d1","newest"),dm("d2","older"),dm("d3","read")];
+        app.unread.insert("d1".into(),3);app.unread.insert("d2".into(),1);
+        assert_eq!(app.unread_dms().iter().map(|c|c.id.as_str()).collect::<Vec<_>>(),["d1","d2"],"only unread DMs, newest first");
+        app.unread.insert("d1".into(),250);let _=ctx.run(input(vec![]),|ctx|{egui::CentralPanel::default().show(ctx,|ui|{app.unread_dm_button(ui,&dm("d1","newest"));});});
+        // Opening one takes you to that conversation, and it leaves the rail.
+        app.home=Home::Chat;app.guild=None;app.channels=app.dms.clone();app.select_channel(dm("d1","newest"));
+        assert!(app.channel.as_ref().is_some_and(|c|c.id=="d1"));
+        assert!(!app.unread_dms().iter().any(|c|c.id=="d1"));
+    }
+    #[test]fn hovering_a_conversation_loads_it_once_and_opening_it_is_then_instant(){
+        let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);app.preview=false;
+        let dm=Channel{id:"d9".into(),kind:1,..Default::default()};
+        app.prefetch_history("d9");assert!(app.prefetched.contains_key("d9"),"hovering asks for the latest messages");
+        let first=app.prefetched["d9"];app.prefetch_history("d9");assert_eq!(app.prefetched["d9"],first,"not asked again within a minute");
+        // The answer arrives while another conversation is open: it fills the cache.
+        let message=Message{id:"5".into(),channel_id:"d9".into(),content:"hey".into(),..Default::default()};
+        app.navigation.save("d9",&std::collections::VecDeque::from(vec![message]),false);
+        assert!(app.navigation.has("d9"));
+        app.guild=None;app.select_channel(dm);
+        assert!(app.loaded&&app.messages.iter().any(|m|m.content=="hey"),"opening shows the messages at once instead of Loading messages…");
+    }
     fn composer_frame(ctx:&egui::Context,app:&mut Eclipse,channel:&Channel,events:Vec<egui::Event>)->egui::FullOutput{ctx.run(input(events),|ctx|{egui::CentralPanel::default().show(ctx,|ui|{app.composer(ui,ctx,channel);});})}
     #[test]fn typing_at_lists_members_and_enter_inserts_a_mention_sent_as_an_id(){
         let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);let channel=app.channel.clone().unwrap();let before=app.messages.len();
@@ -2472,6 +2613,17 @@ mod interaction_tests {
         composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Key{key:egui::Key::Enter,physical_key:None,pressed:false,repeat:false,modifiers:Default::default()}]);
         composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Text("second".into()),enter(false)]);assert_eq!(app.messages.back().unwrap().content,"hello\nsecond");assert!(!app.drafts.contains_key(&channel.id));
         let sent=app.messages.len();composer_frame(&ctx,&mut app,&channel,vec![enter(false)]);assert_eq!(app.messages.len(),sent);
+        // After sending, the message box keeps focus so the next message can be typed at once.
+        composer_frame(&ctx,&mut app,&channel,vec![]);assert!(ctx.memory(|m|m.focused().is_some()),"the message box is still focused after sending");
+        composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Key{key:egui::Key::Enter,physical_key:None,pressed:false,repeat:false,modifiers:Default::default()}]);
+        composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Text("third".into()),enter(false)]);assert_eq!(app.messages.back().unwrap().content,"third");
+        // A real send disables the box until Discord answers; focus returns once it is done.
+        app.focus_message_box=true;app.pending=Some((channel.id.clone(),"slow".into()));
+        composer_frame(&ctx,&mut app,&channel,vec![]);composer_frame(&ctx,&mut app,&channel,vec![]);
+        app.pending=None;composer_frame(&ctx,&mut app,&channel,vec![]);
+        assert!(ctx.memory(|m|m.focused().is_some()),"focus comes back when the send finishes");
+        composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Key{key:egui::Key::Enter,physical_key:None,pressed:false,repeat:false,modifiers:Default::default()}]);
+        composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Text("fourth".into()),enter(false)]);assert_eq!(app.messages.back().unwrap().content,"fourth");
     }
     #[test]fn both_settings_panels_close_on_outside_click_and_keep_inside_clicks(){
         for server in [false,true]{let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);app.settings=!server;app.server_settings=server;

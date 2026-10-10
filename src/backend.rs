@@ -94,6 +94,8 @@ pub enum Command {
     Refresh,
     Emojis(String),
     Gifs(String),
+    /// Discord's GIF home: trending categories with preview pictures.
+    GifCategories,
     Ring(String, Arc<AtomicU64>, u64),
 }
 
@@ -122,6 +124,7 @@ pub enum Event {
     Signal(String, Value),
     Emojis(String, Vec<crate::media_picker::CustomEmoji>),
     Gifs(String, Vec<crate::media_picker::Gif>),
+    GifCategories(Vec<(String, String)>),
     Ringing,
 }
 
@@ -289,6 +292,46 @@ impl Api {
             base: API.into(),
         })
     }
+    /// Discord's own upload flow: ask for an upload slot (Discord checks the account's and the
+    /// server's size limit here, before any data moves), stream the file to the returned
+    /// storage URL without a request timeout, and return the name the message refers to.
+    fn upload(&mut self, channel: &str, path: &PathBuf, filename: &str) -> Result<String, String> {
+        let size = std::fs::metadata(path).map_err(|_| "The selected file is no longer available.".to_owned())?.len();
+        if size > MAX_UPLOAD {
+            return Err("Choose a file smaller than 1 GB.".into());
+        }
+        let slot: Value = self.request(
+            Method::POST,
+            &format!("/channels/{channel}/attachments"),
+            Some(json!({"files":[{"id":"0","filename":filename,"file_size":size,"is_clip":false}]})),
+            None,
+        )?;
+        let target = &slot["attachments"][0];
+        let (Some(url), Some(uploaded)) = (target["upload_url"].as_str(), target["upload_filename"].as_str()) else {
+            return Err("Discord did not provide an upload slot for this file.".into());
+        };
+        if !upload_url(url) {
+            return Err("Discord returned an unexpected upload address.".into());
+        }
+        let file = std::fs::File::open(path).map_err(|_| "Could not open the selected file.".to_owned())?;
+        // Large files can take minutes: only connecting is time-limited.
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(15))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| "Could not initialize HTTPS.".to_owned())?;
+        let response = client
+            .put(url)
+            .header("Content-Type", "application/octet-stream")
+            .header("Content-Length", size)
+            .body(reqwest::blocking::Body::sized(file, size))
+            .send()
+            .map_err(|_| "The upload was interrupted. Check your connection and try again.".to_owned())?;
+        if !response.status().is_success() {
+            return Err(format!("The upload failed ({}).", response.status().as_u16()));
+        }
+        Ok(uploaded.to_owned())
+    }
     fn wait(&self, until: Instant) -> Result<(), String> {
         while Instant::now() < until {
             if self.cancel.load(Ordering::Relaxed) {
@@ -433,22 +476,37 @@ impl Api {
                 self.request(Method::GET, &format!("/guilds/{guild}/emojis"), None, None)?,
             ),
             Command::Gifs(query) => {
+                let trending = query == crate::media_picker::TRENDING;
                 let mut url = reqwest::Url::parse("https://discord.com/gifs/search").unwrap();
-                url.query_pairs_mut()
-                    .append_pair("q", &query)
-                    .append_pair("media_format", "tinygif")
-                    .append_pair("provider", "klipy")
-                    .append_pair("locale", "en-US")
-                    .append_pair("limit", "20");
+                {
+                    let mut pairs = url.query_pairs_mut();
+                    if !trending { pairs.append_pair("q", &query); }
+                    pairs
+                        .append_pair("media_format", "tinygif")
+                        .append_pair("provider", "klipy")
+                        .append_pair("locale", "en-US")
+                        .append_pair("limit", "40");
+                }
+                let route = if trending { "/gifs/trending-gifs" } else { "/gifs/search" };
                 Event::Gifs(
                     query,
                     self.request(
                         Method::GET,
-                        &format!("/gifs/search?{}", url.query().unwrap_or_default()),
+                        &format!("{route}?{}", url.query().unwrap_or_default()),
                         None,
                         None,
                     )?,
                 )
+            }
+            Command::GifCategories => {
+                // A failed home just shows the search hint instead of a spinner.
+                let home: Value = self.request(
+                    Method::GET,
+                    "/gifs/trending?provider=klipy&locale=en-US&media_format=tinygif",
+                    None,
+                    None,
+                ).unwrap_or(Value::Null);
+                Event::GifCategories(crate::media_picker::categories(&home))
             }
             Command::Ring(channel, intent, epoch) => {
                 if intent.load(Ordering::Acquire) != epoch {
@@ -494,13 +552,14 @@ impl Api {
                         .file_name()
                         .and_then(|s| s.to_str())
                         .ok_or("Invalid filename.")?;
-                    payload["attachments"] = json!([{"id":0,"filename":filename}]);
+                    let uploaded = self.upload(&channel, file, filename)?;
+                    payload["attachments"] = json!([{"id":"0","filename":filename,"uploaded_filename":uploaded}]);
                 }
                 let message = self.request(
                     Method::POST,
                     &format!("/channels/{channel}/messages"),
                     Some(payload),
-                    file.as_ref(),
+                    None,
                 )?;
                 Event::Sent(message)
             }
@@ -735,7 +794,7 @@ fn gateway(
                     Some(0) => {
                         let data = &value["d"];
                         let kind=value["t"].as_str().unwrap_or_default();
-                        if matches!(kind,"READY"|"READY_SUPPLEMENTAL"|"GUILD_CREATE"|"GUILD_UPDATE"|"GUILD_MEMBER_ADD"|"GUILD_MEMBER_UPDATE"|"GUILD_MEMBER_REMOVE"|"GUILD_MEMBERS_CHUNK"|"GUILD_MEMBER_LIST_UPDATE"|"GUILD_ROLE_CREATE"|"GUILD_ROLE_UPDATE"|"GUILD_ROLE_DELETE"|"RELATIONSHIP_ADD"|"RELATIONSHIP_UPDATE"|"RELATIONSHIP_REMOVE"|"USER_SETTINGS_UPDATE"|"MESSAGE_ACK"|"QUESTS_USER_STATUS_UPDATE"|"GUILD_DELETE") {
+                        if matches!(kind,"READY"|"READY_SUPPLEMENTAL"|"GUILD_CREATE"|"GUILD_UPDATE"|"GUILD_MEMBER_ADD"|"GUILD_MEMBER_UPDATE"|"GUILD_MEMBER_REMOVE"|"GUILD_MEMBERS_CHUNK"|"GUILD_MEMBER_LIST_UPDATE"|"GUILD_ROLE_CREATE"|"GUILD_ROLE_UPDATE"|"GUILD_ROLE_DELETE"|"RELATIONSHIP_ADD"|"RELATIONSHIP_UPDATE"|"RELATIONSHIP_REMOVE"|"USER_SETTINGS_UPDATE"|"MESSAGE_ACK"|"QUESTS_USER_STATUS_UPDATE"|"GUILD_EMOJIS_UPDATE"|"CHANNEL_CREATE"|"CHANNEL_UPDATE"|"CHANNEL_DELETE"|"GUILD_DELETE") {
                             if !emit(&tx,&ctx,Event::Account(kind.into(),data.clone())){return Ok(());}
                         }
                         let event = match value["t"].as_str().unwrap_or("") {
@@ -1024,5 +1083,28 @@ mod tests {
             .starts_with("GET /users/@me/settings-proto/1 "));
         assert!(rx.recv().unwrap().starts_with("GET /users/@me/settings "));
         handle.join().unwrap();
+    }
+}
+
+/// Eclipse's own ceiling; Discord applies the account's and the server's real limit when the
+/// upload slot is requested (Nitro allows the most).
+const MAX_UPLOAD: u64 = 1024 * 1024 * 1024;
+/// Upload slots point at Discord's Google Cloud Storage bucket over HTTPS.
+fn upload_url(url: &str) -> bool {
+    reqwest::Url::parse(url).is_ok_and(|u| {
+        u.scheme() == "https"
+            && u.host_str().is_some_and(|host| host == "storage.googleapis.com" || host.ends_with(".storage.googleapis.com") || host == "discord-attachments-uploads-prd.storage.googleapis.com")
+            && u.username().is_empty()
+            && u.password().is_none()
+    })
+}
+#[cfg(test)]
+mod upload_tests {
+    #[test]
+    fn upload_slots_must_be_discords_storage_over_https() {
+        assert!(super::upload_url("https://discord-attachments-uploads-prd.storage.googleapis.com/abc/file.png?upload_id=1"));
+        assert!(!super::upload_url("http://discord-attachments-uploads-prd.storage.googleapis.com/abc"));
+        assert!(!super::upload_url("https://storage.googleapis.com.evil.com/abc"));
+        assert!(!super::upload_url("https://evil.com/abc"));
     }
 }

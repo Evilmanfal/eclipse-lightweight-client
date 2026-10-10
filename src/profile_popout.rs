@@ -99,11 +99,64 @@ impl Eclipse {
     pub(in crate::ui) fn guild_tag_chip(&mut self,ui:&mut egui::Ui,user:&User){
         if let Some((tag,url))=crate::identity::guild_tag(user){egui::Frame::NONE.fill(CARD).corner_radius(4).inner_margin(egui::Margin::symmetric(4,2)).show(ui,|ui|{ui.horizontal(|ui|{ui.spacing_mut().item_spacing.x=3.;if url.is_some(){let(rect,_)=ui.allocate_exact_size(Vec2::splat(13.),egui::Sense::hover());crate::identity::paint_art(ui,&mut self.images,rect,url,0);}ui.label(RichText::new(tag).size(10.).strong().color(TEXT));});});}
     }
+    /// A voice channel (or someone listed under it) as a drop target for a dragged person:
+    /// highlights while hovered and moves them on release.
+    pub(in crate::ui) fn voice_drop_target(&mut self,ui:&egui::Ui,response:&egui::Response,channel:&Channel){
+        if let Some(drag)=response.dnd_hover_payload::<VoiceDrag>().filter(|d|d.from!=channel.id){
+            ui.painter().rect_stroke(response.rect.expand(1.),6,Stroke::new(1.5_f32,self.accent()),egui::StrokeKind::Inside);
+            let _=drag;
+        }
+        if let Some(drag)=response.dnd_release_payload::<VoiceDrag>(){
+            if drag.from!=channel.id&&channel.guild_id.as_deref()==Some(drag.guild.as_str()){
+                if self.preview{self.error=Some("Offline preview: voice moderation is not sent to Discord.".into());}
+                else{self.mutate("voice-moderation",reqwest::Method::PATCH,format!("/guilds/{}/members/{}",drag.guild,drag.user),Some(serde_json::json!({"channel_id":channel.id})));}
+            }
+        }
+    }
+    /// The dragged person's name follows the pointer while moving them between voice channels.
+    pub(in crate::ui) fn voice_drag_overlay(&self,ctx:&egui::Context){
+        let Some(drag)=egui::DragAndDrop::payload::<VoiceDrag>(ctx) else{return};
+        let Some(pointer)=ctx.pointer_latest_pos() else{return};
+        egui::Area::new(egui::Id::new("voice-drag")).order(egui::Order::Tooltip).interactable(false).fixed_pos(pointer+Vec2::new(14.,8.)).show(ctx,|ui|{
+            egui::Frame::NONE.fill(CARD).stroke(Stroke::new(1.0_f32,BORDER)).corner_radius(6).inner_margin(egui::Margin::symmetric(8,4)).show(ui,|ui|{ui.label(RichText::new(format!("Move {}",drag.name)).size(12.).color(TEXT));});
+        });
+        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
     /// Gives the call screen the same people the sidebar lists under the call's voice channel.
     pub(in crate::ui) fn sync_call_roster(&mut self){
         let Some(channel)=self.calls.channel().cloned() else{return};
-        let users=self.voice.in_channel(&channel.id).iter().map(|state|(self.voice_identity(state).0,state.streaming)).collect();
+        let states=self.voice.in_channel(&channel.id);
+        let users=states.iter().map(|state|(self.voice_identity(state).0,state.streaming)).collect();
         self.calls.sync_roster(users);
+        let me=self.user.as_ref().map(|u|u.id.clone()).unwrap_or_default();
+        let previews=states.iter().filter(|s|s.streaming&&s.user_id!=me).filter_map(|s|self.stream_preview(&channel,&s.user_id).map(|url|(s.user_id.clone(),url))).collect();
+        self.calls.previews=previews;
+    }
+    /// The current preview picture of someone's stream, asked for again at most once a minute.
+    pub(in crate::ui) fn stream_preview(&mut self,channel:&Channel,user:&str)->Option<String>{
+        if self.preview{return None;}
+        let key=crate::calls::stream_key(channel,user);
+        let feature=format!("stream-preview:{key}");
+        if self.stream_preview_fetched.get(&key).is_none_or(|at|at.elapsed()>=Duration::from_secs(60)){
+            if self.stream_preview_fetched.len()>256{self.stream_preview_fetched.clear();}
+            self.stream_preview_fetched.insert(key.clone(),Instant::now());
+            self.request_feature(&feature,format!("/streams/{key}/preview"));
+        }
+        self.stream_preview_status(channel,user).ok()
+    }
+    /// The preview picture link, or why there isn't one (shown in the hover popup).
+    pub(in crate::ui) fn stream_preview_status(&self,channel:&Channel,user:&str)->Result<String,String>{
+        let feature=format!("stream-preview:{}",crate::calls::stream_key(channel,user));
+        if let Some(error)=self.feature_errors.get(&feature){
+            return Err(if error.contains("404")||error.to_lowercase().contains("unknown"){"No preview yet".into()}else{format!("Preview unavailable: {}",error.chars().take(80).collect::<String>())});
+        }
+        let Some(data)=self.features.get(&feature) else{return Err("Loading preview…".into())};
+        let Some(url)=data["url"].as_str() else{return Err("No preview yet".into())};
+        if !assets::public_url(url)&&!assets::stream_preview_url(url){
+            let host=reqwest::Url::parse(url).ok().and_then(|u|u.host_str().map(str::to_owned)).unwrap_or_default();
+            return Err(format!("Preview hosted on {host} is not loaded"));
+        }
+        Ok(url.to_owned())
     }
     /// Watch Stream from the sidebar or a call tile: joins the voice channel first if needed.
     pub(in crate::ui) fn watch_stream(&mut self,channel:&Channel,user:&str){
@@ -125,7 +178,11 @@ impl Eclipse {
         if in_call&&!states.iter().any(|s|s.user_id==me){states.insert(0,crate::voice_roster::VoiceState{user_id:me.clone(),guild_id:channel.guild_id.clone(),channel_id:channel.id.clone(),..Default::default()});}
         if states.is_empty(){return;}
         let mut missing=vec![];
-        let mut watch=None;
+        let mut watch=None;let mut hovered_live=None;let mut moderation=None;
+        // Voice moderation needs the matching server permission (Mute, Deafen, Move Members).
+        let here=channel.guild_id.as_deref().is_some_and(|g|g==self.server.id);
+        let (can_mute,can_deafen,can_move)=(here&&self.server.can(&me,22),here&&self.server.can(&me,23),here&&self.server.can(&me,24));
+        let destinations:Vec<(String,String)>=if can_move{self.channels.iter().filter(|c|matches!(c.kind,2|13)&&c.id!=channel.id&&c.guild_id==channel.guild_id).map(|c|(c.id.clone(),c.label())).collect()}else{vec![]};
         for state in states.iter().take(99){
             let (user,name)=self.voice_identity(state);
             if user.username.is_empty(){missing.push(state.user_id.clone());}
@@ -135,10 +192,22 @@ impl Eclipse {
             // Hovering someone who is live offers Watch Stream, like Discord.
             let row=egui::Rect::from_min_size(ui.cursor().min,Vec2::new(ui.available_width(),22.));
             let offer=state.streaming&&!own&&ui.rect_contains_pointer(row)&&!(in_call&&self.calls.watching()==Some(state.user_id.as_str()));
+            if offer{hovered_live=Some((state.user_id.clone(),row));}
             let (muted,deafened)=if own{(self.calls.muted(),self.calls.deafened())}else{(state.muted,state.deafened)};
+            // Right-clicking anywhere on the row opens the person's menu plus voice moderation.
+            let row_response=ui.interact(row,egui::Id::new(("voice-row",&channel.id,&state.user_id)),if can_move{egui::Sense::click_and_drag()}else{egui::Sense::click()});
+            // With Move Members, drag someone onto another voice channel to move them, like Discord.
+            if can_move&&row_response.drag_started(){
+                if let Some(guild)=channel.guild_id.clone(){egui::DragAndDrop::set_payload(ui.ctx(),VoiceDrag{user:state.user_id.clone(),name:name.clone(),from:channel.id.clone(),guild});}
+            }
+            // Dropping onto someone already in this channel moves the dragged person here too.
+            self.voice_drop_target(ui,&row_response,channel);
             ui.horizontal(|ui|{
                 ui.spacing_mut().item_spacing.x=6.;ui.add_space(26.);
-                let before=ui.cursor().min;self.avatar_with_status(ui,&user,None,22.,false);
+                let before=ui.cursor().min;
+                let avatar=self.paint_avatar(ui,&user,None,22.,false);
+                if avatar.clicked(){self.toggle_profile_at(&user,avatar.rect);}
+                avatar.context_menu(|ui|{self.user_menu(ui,&user);if let Some(choice)=voice_moderation_menu(ui,state,can_mute,can_deafen,can_move,&destinations){moderation=Some(choice);}});
                 if speaking{ui.painter().circle_stroke(before+Vec2::splat(11.),12.,Stroke::new(2.0_f32,Color32::from_rgb(67,181,129)));}
                 // Reserve room for the state icons so long names truncate instead of pushing them off.
                 let icons=if own{22.}else{if deafened||muted{20.}else{0.}}+if state.video{20.}else{0.}+if offer{86.}else if state.streaming{34.}else{0.};
@@ -156,7 +225,7 @@ impl Eclipse {
                     if state.video{bar_control(ui,Control::Camera,false,18.,"Camera on");}
                     if offer{
                         let (rect,_)=ui.allocate_exact_size(Vec2::new(84.,18.),egui::Sense::hover());
-                        if crate::calls::watch_pill(ui,rect,egui::Id::new(("sidebar-watch",&state.user_id))){watch=Some(state.user_id.clone());}
+                        if crate::calls::watch_pill(ui,rect,egui::Id::new(("sidebar-watch",&state.user_id)),"Watch Stream"){watch=Some(state.user_id.clone());}
                     }else if state.streaming{
                         let galley=ui.painter().layout_no_wrap("LIVE".into(),egui::FontId::proportional(9.),Color32::WHITE);
                         let (rect,response)=ui.allocate_exact_size(galley.size()+Vec2::new(8.,4.),egui::Sense::hover());
@@ -165,8 +234,43 @@ impl Eclipse {
                     }
                 });
             });
+            row_response.context_menu(|ui|{self.user_menu(ui,&user);if let Some(choice)=voice_moderation_menu(ui,state,can_mute,can_deafen,can_move,&destinations){moderation=Some(choice);}});
         }
         if let Some(user)=watch{self.watch_stream(channel,&user);}
+        if let (Some((user,change)),Some(guild))=(moderation,channel.guild_id.clone()){
+            if self.preview{self.error=Some("Offline preview: voice moderation is not sent to Discord.".into());}
+            else{self.mutate("voice-moderation",reqwest::Method::PATCH,format!("/guilds/{guild}/members/{user}"),Some(change));}
+        }
+        if let Some((user,row))=hovered_live{
+            let _=self.stream_preview(channel,&user);
+            let status=self.stream_preview_status(channel,&user);
+            {
+                let size=Vec2::new(256.,144.);
+                egui::Area::new(egui::Id::new("stream-preview-popup")).order(egui::Order::Tooltip).interactable(false).fixed_pos(row.right_top()+Vec2::new(14.,-60.)).show(ui.ctx(),|ui|{
+                    egui::Frame::NONE.fill(CARD).stroke(Stroke::new(1.0_f32,BORDER)).corner_radius(8).inner_margin(6).show(ui,|ui|{
+                        let (rect,_)=ui.allocate_exact_size(size,egui::Sense::hover());
+                        ui.painter().rect_filled(rect,6,Color32::BLACK);
+                        // Always say what is happening, so a missing preview can be explained.
+                        let message=match &status{
+                            Ok(url)=>match self.images.texture(url,rect,ui.ctx()){
+                                Some(texture)=>{
+                                    let image=self.images.dimensions(url,rect.size(),ui.ctx()).unwrap_or(rect.size());
+                                    egui::Image::new((texture,rect.size())).uv(crate::identity::cover_uv(image,rect.size())).corner_radius(6).paint_at(ui,rect);
+                                    None
+                                }
+                                None if self.images.failed(url)=>Some("Preview picture failed to load".to_owned()),
+                                None=>Some("Loading preview…".to_owned()),
+                            },
+                            Err(message)=>Some(message.clone()),
+                        };
+                        if let Some(message)=message{
+                            let text=ui.painter().layout(message,egui::FontId::proportional(12.),MUTED,rect.width()-20.);
+                            ui.painter().galley(rect.center()-text.size()/2.,text,MUTED);
+                        }
+                    });
+                });
+            }
+        }
         if let Some(guild)=channel.guild_id.clone().filter(|_|!self.preview){
             let ids:Vec<String>=missing.into_iter().filter(|id|self.voice_lookups.insert(id.clone())).take(100).collect();
             if !ids.is_empty()&&self.voice_lookups.len()<5000{self.send_gateway(serde_json::json!({"op":8,"d":{"guild_id":guild,"user_ids":ids,"presences":false}}));}
@@ -193,7 +297,9 @@ impl Eclipse {
         let Some(channel)=self.calls.channel().cloned()else{return;};
         egui::Frame::NONE.fill(SIDE).corner_radius(10).inner_margin(10).show(ui,|ui|{
             ui.set_min_width(ui.available_width());ui.horizontal(|ui|{
-                ui.vertical(|ui|{ui.label(RichText::new(if self.preview{"Voice preview"}else{self.calls.connection_label()}).size(12.).strong().color(Color32::from_rgb(94,200,148)));ui.add(egui::Label::new(RichText::new(channel.label()).size(11.).color(MUTED)).truncate());});
+                ui.vertical(|ui|{ui.horizontal(|ui|{ui.spacing_mut().item_spacing.x=6.;ui.label(RichText::new(if self.preview{"Voice preview"}else{self.calls.connection_label()}).size(12.).strong().color(Color32::from_rgb(94,200,148)));
+                    // Live ping to Discord's voice server, coloured like Discord's connection bars.
+                    if let Some(ms)=self.calls.ping(){ui.label(RichText::new(format!("{ms} ms")).size(11.).strong().color(ping_color(ms))).on_hover_text("Ping to Discord's voice server, updated with every heartbeat");}});ui.add(egui::Label::new(RichText::new(channel.label()).size(11.).color(MUTED)).truncate());});
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{if crate::widgets::control(ui,crate::widgets::Control::Hangup,false,28.,"Disconnect from voice").clicked(){self.calls.leave();}if ui.small_button("View").on_hover_text("Open call view").clicked(){self.calls.chat=false;}});
             });
         });ui.add_space(8.);
@@ -206,3 +312,29 @@ pub(in crate::ui) fn profile_metadata(data:&Value)->Value {
     if let Some(server)=data["guild_member_profile"].as_object(){if !metadata.is_object(){metadata=json!({});}for(key,value)in server{if !value.is_null(){metadata[key]=value.clone();}}}
     metadata
 }
+
+/// Discord's voice moderation items for someone under a voice channel. Returns the member
+/// change to send (PATCH /guilds/{guild}/members/{user}) when one is chosen.
+pub(in crate::ui) fn voice_moderation_menu(ui:&mut egui::Ui,state:&crate::voice_roster::VoiceState,can_mute:bool,can_deafen:bool,can_move:bool,destinations:&[(String,String)])->Option<(String,serde_json::Value)>{
+    if !(can_mute||can_deafen||can_move){return None;}
+    let mut change=None;
+    ui.separator();
+    if can_mute&&ui.checkbox(&mut state.server_muted.clone(),"Server Mute").clicked(){change=Some(serde_json::json!({"mute":!state.server_muted}));ui.close();}
+    if can_deafen&&ui.checkbox(&mut state.server_deafened.clone(),"Server Deafen").clicked(){change=Some(serde_json::json!({"deaf":!state.server_deafened}));ui.close();}
+    if can_move{
+        ui.menu_button("Move To",|ui|{
+            if destinations.is_empty(){ui.weak("No other voice channels");}
+            egui::ScrollArea::vertical().max_height(300.).show(ui,|ui|{
+                for (id,label) in destinations{if ui.button(label).clicked(){change=Some(serde_json::json!({"channel_id":id}));ui.close();}}
+            });
+        });
+        if ui.button(RichText::new("Disconnect").color(Color32::from_rgb(242,63,67))).clicked(){change=Some(serde_json::json!({"channel_id":null}));ui.close();}
+    }
+    change.map(|change|(state.user_id.clone(),change))
+}
+
+/// Someone being dragged to another voice channel.
+pub(in crate::ui) struct VoiceDrag { user: String, name: String, from: String, guild: String }
+
+/// Green under 100 ms, yellow under 250 ms, red above, like Discord's connection indicator.
+fn ping_color(ms:u32)->Color32{if ms<100{Color32::from_rgb(35,165,90)}else if ms<250{Color32::from_rgb(240,178,50)}else{Color32::from_rgb(242,63,67)}}

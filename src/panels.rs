@@ -17,6 +17,7 @@ use serde_json::{json,Value};
 pub(in crate::ui) use login_screen::LoginUi;
 pub(in crate::ui) use user_panel::USER_PANEL_HEIGHT;
 pub(in crate::ui) use profile_popout::profile_key_for;
+#[cfg(test)] pub(in crate::ui) use profile_popout::voice_moderation_menu;
 
 impl Eclipse {
     pub(super) fn request_feature(&mut self,key:&str,route:String){
@@ -55,10 +56,44 @@ impl Eclipse {
         if self.features.len()>40{self.features.retain(|key,_|matches!(key.as_str(),"settings"|"my-profile"|"shop"|"quests"));}
         self.features.insert(key,data);
     }
+    /// Keeps every server's custom emojis (from READY, GUILD_CREATE and GUILD_EMOJIS_UPDATE).
+    fn remember_emojis(&mut self,kind:&str,data:&Value){
+        let mut keep=|id:Option<&str>,name:Option<&str>,emojis:&Value|{
+            let (Some(id),Some(list))=(id,emojis.as_array()) else{return};
+            let emojis:Vec<crate::media_picker::CustomEmoji>=list.iter().filter_map(|e|serde_json::from_value(e.clone()).ok()).take(500).collect();
+            let name=name.map(str::to_owned).or_else(||self.server_emojis.get(id).map(|(n,_)|n.clone())).unwrap_or_else(||"Server".into());
+            if self.server_emojis.len()<300||self.server_emojis.contains_key(id){self.server_emojis.insert(id.to_owned(),(name,emojis));}
+        };
+        match kind{
+            "READY"=>for guild in data["guilds"].as_array().into_iter().flatten().take(300){keep(guild["id"].as_str(),guild["name"].as_str().or(guild["properties"]["name"].as_str()),&guild["emojis"]);},
+            "GUILD_CREATE"=>keep(data["id"].as_str(),data["name"].as_str().or(data["properties"]["name"].as_str()),&data["emojis"]),
+            "GUILD_EMOJIS_UPDATE"=>keep(data["guild_id"].as_str(),None,&data["emojis"]),
+            "GUILD_DELETE"=>{if let Some(id)=data["id"].as_str(){self.server_emojis.remove(id);}},
+            _=>{}
+        }
+    }
+    /// With any Nitro plan, emojis from all your other servers work everywhere (servers, DMs,
+    /// group chats); without Nitro only the current server's own emojis are offered.
+    pub(super) fn nitro_emojis(&self)->Vec<(String,Vec<crate::media_picker::CustomEmoji>)>{
+        if !self.user.as_ref().is_some_and(|u|u.premium_type>0){return vec![];}
+        let mut servers:Vec<_>=self.server_emojis.iter().filter(|(id,(_,emojis))|self.guild.as_deref()!=Some(id.as_str())&&!emojis.is_empty()).map(|(_,(name,emojis))|(name.clone(),emojis.clone())).collect();
+        servers.sort_by(|a,b|a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+        servers
+    }
     pub(super) fn account_event(&mut self,kind:&str,data:&Value){
         self.voice.ingest(kind,data);
         self.server.ingest(kind,data);
         if matches!(kind,"CHANNEL_CREATE"|"CHANNEL_UPDATE"|"CHANNEL_DELETE"|"GUILD_DELETE"){if let Some(id)=data["guild_id"].as_str().or_else(||if kind=="GUILD_DELETE"{data["id"].as_str()}else{None}){self.navigation.invalidate_channels(id);}}
+        // Live channel changes in the open server (for example a bot's new voice channel).
+        if matches!(kind,"CHANNEL_CREATE"|"CHANNEL_UPDATE"|"CHANNEL_DELETE")&&data["guild_id"].as_str().is_some_and(|g|self.guild.as_deref()==Some(g)){
+            if let Ok(channel)=serde_json::from_value::<Channel>(data.clone()){
+                self.channels.retain(|c|c.id!=channel.id);
+                if kind!="CHANNEL_DELETE"&&self.channels.len()<1000{self.channels.push(channel);}
+                crate::navigation::sort_channels(&mut self.channels);
+                if let Some(guild)=self.guild.clone(){self.navigation.save_channels(&guild,&self.channels);}
+            }
+        }
+        self.remember_emojis(kind,data);
         match kind{
             "READY"=>{
                 if let Some(guilds)=data["guilds"].as_array(){for guild in guilds.iter().take(12){if let(Some(id),Some(channels))=(guild["id"].as_str(),guild["channels"].as_array()){let mut channels:Vec<Channel>=channels.iter().filter_map(|c|serde_json::from_value(c.clone()).ok()).take(500).collect();for c in &mut channels{c.guild_id=Some(id.into());}crate::navigation::sort_channels(&mut channels);self.navigation.save_channels(id,&channels);}}}

@@ -65,7 +65,12 @@ pub struct Picker {
     pub channel: String,
     pub guild: Option<String>,
     pub emojis: Vec<CustomEmoji>,
+    /// Nitro: emojis from your other servers, by server name, usable anywhere.
+    pub other_servers: Vec<(String, Vec<CustomEmoji>)>,
     pub gifs: Vec<Gif>,
+    /// The GIF home: (label, preview picture), Trending GIFs first.
+    pub categories: Vec<(String, String)>,
+    categories_pending: bool,
     pub query: String,
     pub requested: String,
     pub pending: bool,
@@ -159,12 +164,20 @@ impl Picker {
         self.just_opened = true;
         self.channel = channel.into();
         self.query.clear();
+        if mode == Mode::Gif && self.categories.is_empty() && !self.categories_pending {
+            self.categories_pending = true;
+            return Some(Command::GifCategories);
+        }
         if mode == Mode::Emoji && self.guild.as_deref() != guild {
             self.guild = guild.map(str::to_owned);
             self.emojis.clear();
             return guild.map(|g| Command::Emojis(g.into()));
         }
         None
+    }
+    pub fn set_categories(&mut self, categories: Vec<(String, String)>) {
+        self.categories = categories;
+        self.categories_pending = false;
     }
     pub fn close(&mut self) {
         self.mode = None;
@@ -184,8 +197,10 @@ impl Picker {
         let mut open = true;
         let mut picked = None;
         let mut command = None;
-        let width = (ctx.screen_rect().width() - 24.0).clamp(240.0, 430.0);
-        let height = (anchor.top() - ctx.screen_rect().top() - 110.0).clamp(100.0, 330.0);
+        // One fixed size for both tabs: the panel no longer shrinks to an empty GIF list
+        // (egui then remembered the small size for Emoji too).
+        let width = (ctx.screen_rect().width() - 24.0).clamp(260.0, 480.0);
+        let height = (anchor.top() - ctx.screen_rect().top() - 120.0).clamp(140.0, 440.0);
         let popup = egui::Popup::new(egui::Id::new("composer-picker"), ctx.clone(), anchor, egui::LayerId::background())
         .open_bool(&mut open)
         .align(egui::RectAlign::TOP_END).gap(6.0).width(width)
@@ -225,7 +240,8 @@ impl Picker {
             egui::ScrollArea::vertical()
                 .id_salt("composer-picker-results")
                 .max_height(height)
-                .auto_shrink([false, true])
+                .min_scrolled_height(height)
+                .auto_shrink([false, false])
                 .show(ui, |ui| {
                     if mode == Mode::Emoji {
                         let query = self.query.to_lowercase();
@@ -278,30 +294,78 @@ impl Picker {
                                 }
                             });
                         }
+                        // Nitro: every other server's emojis, a section per server.
+                        let mut shown = 0;
+                        for (server, emojis) in &self.other_servers {
+                            let matching: Vec<_> = emojis.iter().filter(|e| e.available != Some(false) && e.name.to_lowercase().contains(&query)).take(300).collect();
+                            if matching.is_empty() || shown >= 3000 { continue; }
+                            shown += matching.len();
+                            ui.separator();
+                            ui.label(server);
+                            ui.horizontal_wrapped(|ui| {
+                                for emoji in matching {
+                                    if image_button(ui, images, emoji.image(), &emoji.name, Vec2::splat(32.0), false)
+                                        .on_hover_text(format!(":{}: · {server}", emoji.name))
+                                        .clicked()
+                                    {
+                                        picked = Some(emoji.token());
+                                    }
+                                }
+                            });
+                        }
                     } else {
+                        let tile_width = ((ui.available_width() - 8.0) / 2.0).floor();
+                        let size = Vec2::new(tile_width, (tile_width * 0.56).round());
+                        let browsing = self.requested.is_empty() && self.gifs.is_empty() && !self.pending;
+                        if !browsing {
+                            ui.horizontal(|ui| {
+                                if ui.small_button("← Categories").clicked() {
+                                    self.query.clear();
+                                    self.requested.clear();
+                                    self.gifs.clear();
+                                    self.pending = false;
+                                }
+                                ui.strong(if self.requested == TRENDING { "Trending GIFs" } else { self.requested.as_str() });
+                            });
+                            ui.add_space(4.0);
+                        }
                         if self.pending {
                             ui.spinner();
-                        } else if self.gifs.is_empty() {
-                            ui.add(egui::Label::new("Search, then choose a GIF to add it to your message.").wrap());
-                        }
-                        ui.horizontal_wrapped(|ui| {
-                            for gif in self.gifs.iter().take(20) {
-                                if image_button(
-                                    ui,
-                                    images,
-                                    Some(gif.image().into()),
-                                    "GIF",
-                                    Vec2::new(120.0, 95.0),
-                                    true,
-                                )
-                                .on_hover_text(&gif.title)
-                                .clicked()
-                                    && crate::model::safe_link(gif.share())
-                                {
-                                    picked = Some(gif.share().to_owned());
-                                }
+                        } else if browsing {
+                            // Discord's GIF home: category tiles with moving previews.
+                            if self.categories.is_empty() {
+                                if self.categories_pending { ui.spinner(); }
+                                else { ui.add(egui::Label::new("Search, then choose a GIF to add it to your message.").wrap()); }
                             }
-                        });
+                            let mut chosen = None;
+                            egui::Grid::new("gif-categories").spacing(Vec2::splat(8.0)).show(ui, |ui| {
+                                for (index, (label, preview)) in self.categories.iter().enumerate() {
+                                    let shown = if label == TRENDING { "Trending GIFs" } else { label.as_str() };
+                                    if gif_tile(ui, images, Some(preview), Some(shown), size).clicked() { chosen = Some(label.clone()); }
+                                    if index % 2 == 1 { ui.end_row(); }
+                                }
+                            });
+                            if let Some(label) = chosen {
+                                self.query = if label == TRENDING { String::new() } else { label.clone() };
+                                self.requested = label.clone();
+                                self.pending = true;
+                                command = Some(Command::Gifs(label));
+                            }
+                        } else if self.gifs.is_empty() {
+                            ui.label("No GIFs found.");
+                        }
+                        if !browsing {
+                            egui::Grid::new("gif-results").spacing(Vec2::splat(8.0)).show(ui, |ui| {
+                                for (index, gif) in self.gifs.iter().take(40).enumerate() {
+                                    if gif_tile(ui, images, Some(gif.image()), None, size).on_hover_text(&gif.title).clicked()
+                                        && crate::model::safe_link(gif.share())
+                                    {
+                                        picked = Some(gif.share().to_owned());
+                                    }
+                                    if index % 2 == 1 { ui.end_row(); }
+                                }
+                            });
+                        }
                         ui.add_space(6.0);
                     }
                 });
@@ -312,6 +376,42 @@ impl Picker {
         }
         (picked.map(|s| (self.channel.clone(), s)), command)
     }
+}
+/// Label of the Trending GIFs tile (also the request that asks for trending GIFs).
+pub const TRENDING: &str = "Trending GIFs\u{1}";
+/// The GIF home from Discord's /gifs/trending answer: Trending GIFs first (previewed by the top
+/// trending GIF), then each category with its preview picture.
+pub fn categories(home: &serde_json::Value) -> Vec<(String, String)> {
+    let mut tiles = Vec::new();
+    if let Some(top) = home["gifs"].as_array().and_then(|gifs| gifs.first()).and_then(|gif| gif["src"].as_str().or(gif["gif_src"].as_str())) {
+        tiles.push((TRENDING.to_owned(), top.to_owned()));
+    }
+    for category in home["categories"].as_array().into_iter().flatten().take(40) {
+        if let (Some(name), Some(src)) = (category["name"].as_str(), category["src"].as_str()) {
+            if !name.is_empty() && name.len() <= 64 { tiles.push((name.to_owned(), src.to_owned())); }
+        }
+    }
+    tiles
+}
+/// A GIF tile filling its cell: the picture cropped to fit, with a darkened, bold label for
+/// category tiles.
+fn gif_tile(ui: &mut egui::Ui, images: &mut Images, url: Option<&str>, label: Option<&str>, size: Vec2) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if !ui.is_rect_visible(rect) { return response; }
+    ui.painter().rect_filled(rect, 8, egui::Color32::from_gray(40));
+    if let Some(url) = url.filter(|u| crate::assets::public_url(u)) {
+        if let Some(texture) = images.texture_sized(url, rect.size(), ui.ctx()) {
+            let image = images.dimensions(url, rect.size(), ui.ctx()).unwrap_or(rect.size());
+            egui::Image::new((texture, rect.size())).uv(crate::identity::cover_uv(image, rect.size())).corner_radius(8).paint_at(ui, rect);
+        }
+    }
+    if let Some(label) = label {
+        ui.painter().rect_filled(rect, 8, egui::Color32::from_black_alpha(if response.hovered() { 90 } else { 140 }));
+        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(16.0), egui::Color32::WHITE);
+    } else if response.hovered() {
+        ui.painter().rect_stroke(rect, 8, egui::Stroke::new(2.0_f32, egui::Color32::from_gray(200)), egui::StrokeKind::Inside);
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 fn image_button(
     ui: &mut egui::Ui,
@@ -346,6 +446,12 @@ fn image_button(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gif_home_lists_trending_first_then_categories() {
+        let home = serde_json::json!({"categories":[{"name":"hello","src":"https://static.klipy.com/hello.gif"},{"name":"","src":"x"}],"gifs":[{"src":"https://static.klipy.com/top.gif"}]});
+        assert_eq!(categories(&home), vec![(TRENDING.to_owned(),"https://static.klipy.com/top.gif".to_owned()),("hello".to_owned(),"https://static.klipy.com/hello.gif".to_owned())]);
+        assert!(categories(&serde_json::json!({})).is_empty());
+    }
     fn input(events:Vec<egui::Event>)->egui::RawInput{egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,Vec2::new(720.0,453.0))),events,..Default::default()}}
     #[test]
     fn pickers_follow_their_anchor_stay_on_screen_and_dismiss(){

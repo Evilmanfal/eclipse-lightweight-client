@@ -1,3 +1,25 @@
+# Unreleased
+
+- Conversations open instantly more often: hovering a channel, DM or group chat loads its latest messages in the background (like Discord), your five most recent DMs load right after sign-in, and the last 30 conversations stay in memory instead of 6. Messages are never written to disk.
+- Avatars, server icons, decorations and nameplates appear much sooner: pictures are kept on disk between launches (%LOCALAPPDATA%\Eclipse\image-cache, up to 300 MB) and load from there instantly, and eight downloads run at once over shared connections instead of three.
+- Unread direct messages appear under Home on the server rail like Discord: the person's avatar with a red unread count (up to 99+), newest first; click one to open that conversation.
+- After sending a message the message box stays ready to type the next one (it lost focus while the message was sending).
+- The Emoji and GIF panels share one fixed, larger size; opening GIFs no longer left the emoji panel small and stuck.
+- The GIF panel opens on Discord-style category tiles (Trending GIFs, then trending topics) with moving previews; clicking one shows its GIFs, and ← Categories goes back. GIFs show as larger two-column tiles.
+- Nitro uploads: files go through Discord's own upload flow (an upload slot, then a direct upload with no time limit), so large files up to your plan's limit work. Discord checks the limit before anything is sent; Eclipse's own ceiling is 1 GB. Uploads that took over 30 seconds used to fail.
+- Nitro emojis: the emoji picker shows custom emojis from all your servers, a section per server, usable in servers, DMs and group chats. Without Nitro it still offers the current server's emojis.
+- Live voice ping next to "Voice connected": the round trip to Discord's voice server, updated every few seconds and colored green, yellow or red.
+- Being moved to another voice channel (by a moderator, or a bot's "join to create" channel) now follows you there and reconnects, instead of disconnecting you.
+- New, renamed and deleted channels appear live in the server list (Eclipse ignored these events before, so a bot's new voice channel never showed up).
+- Drag someone under a voice channel onto another voice channel to move them (with Move Members); the target highlights and their name follows the pointer.
+- Right-click someone under a voice channel for voice moderation, shown only with the matching server permission: Server Mute, Server Deafen, Move To (any other voice channel) and Disconnect.
+- Stream preview pictures load (Discord serves them without a file extension), and the hover popup says why when there is no picture.
+- Push to talk sounds clean from the first word: releasing the key now only stops sending, instead of muting, which restarted echo cancellation and noise suppression on every press (static at the start, muffled short phrases).
+- Share your screen while watching someone else's stream (no more "Stop watching" call error).
+- Watch your own stream: your call tile shows what you're sharing (960x540, 30 fps) with View Your Stream to see it large, full screen or enlarged.
+- Stream preview pictures: live friends' call tiles show a preview of their stream behind Watch Stream, and hovering a live friend under a voice channel shows it too; previews refresh every minute. Your own stream uploads a preview every minute, which you can turn off with "Show a preview of my stream" in the Screen Share dialog. The dialog also remembers your resolution and frame rate.
+- Call tiles are centered and kept in join order: newcomers appear on the right and the row re-centers when someone leaves.
+
 # Eclipse 0.8.4 — October 9, 2026
 
 - Fixed a stream getting stuck on "Connecting to stream…" when watched again after stopping: Eclipse now tells Discord it left the stream.

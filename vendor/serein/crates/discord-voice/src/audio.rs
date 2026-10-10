@@ -71,6 +71,9 @@ pub struct Gate {
 	input_gain: AtomicU16,
 	output_gain: AtomicU16,
 	echo_reset: AtomicBool,
+	/// Push to talk released (Eclipse): the microphone and its processing keep running so
+	/// echo cancellation and noise suppression stay settled, but nothing is sent.
+	holding: AtomicBool,
 	preview_level: AtomicU16,
 	processing_ready: AtomicBool,
 }
@@ -93,6 +96,7 @@ impl Default for Gate {
 			input_gain: AtomicU16::new(100),
 			output_gain: AtomicU16::new(100),
 			echo_reset: AtomicBool::new(false),
+			holding: AtomicBool::new(false),
 			preview_level: AtomicU16::new(0),
 			processing_ready: AtomicBool::new(true),
 		}
@@ -407,7 +411,7 @@ impl Audio {
 									.apply(&mut frame, processing.sensitivity_db);
 								if preview {
 									drops += u64::from(active.output.push(frame).is_err());
-								} else if audible {
+								} else if audible && !worker_gate.holding.load(Ordering::Acquire) {
 									drops += u64::from(capture.try_send(frame).is_err());
 								}
 							}
@@ -488,6 +492,12 @@ impl Audio {
 	/// Idempotent: repeated calls with the same state change nothing. Each gate invalidates only
 	/// its own direction, so a burst of mute clicks never drops what you hear and the echo
 	/// canceller restarts only when the microphone resumes.
+	/// Push to talk: hold back what the microphone hears without restarting its processing.
+	/// Unlike mute, releasing the key keeps echo cancellation and noise suppression warm, so
+	/// the next press starts clean instead of with static and muffled words.
+	pub fn set_hold(&self, holding: bool) {
+		self.gate.holding.store(holding, Ordering::Release);
+	}
 	pub fn set_controls(&self, muted: bool, deafened: bool) {
 		let muted = muted || deafened;
 		if self.gate.muted.swap(muted, Ordering::AcqRel) != muted {
@@ -1197,6 +1207,16 @@ mod tests {
 		assert!(gate.muted.load(Ordering::Acquire) && gate.deafened.load(Ordering::Acquire));
 		audio.set_controls(false, false);
 		assert!(!gate.muted.load(Ordering::Acquire) && gate.echo_reset.load(Ordering::Acquire));
+		// Push to talk (Eclipse): pressing and releasing only holds back sending. The microphone
+		// stays open and its echo canceller and noise suppression are never restarted.
+		gate.echo_reset.store(false, Ordering::Release);
+		let before = generations();
+		for holding in [true, false, true, false] {
+			audio.set_hold(holding);
+			assert_eq!(gate.holding.load(Ordering::Acquire), holding);
+		}
+		assert_eq!(generations(), before, "holding never drops captured audio");
+		assert!(!gate.muted.load(Ordering::Acquire) && !gate.echo_reset.load(Ordering::Acquire));
 	}
 
 	#[test]
