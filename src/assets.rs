@@ -295,6 +295,13 @@ fn fetch(client: &reqwest::blocking::Client, url: &str, size: u32) -> Result<Dec
     if !public_url(url) && !stream_preview_url(url) {
         return Err(());
     }
+    // Pictures seen before load from disk in milliseconds instead of being downloaded again.
+    let cacheable = public_url(url);
+    if cacheable {
+        if let Some(image) = disk::read(url).and_then(|bytes| decode_sized(&bytes, size).ok()) {
+            return Ok(image);
+        }
+    }
     let response = client
         .get(url)
         .send()
@@ -313,7 +320,55 @@ fn fetch(client: &reqwest::blocking::Client, url: &str, size: u32) -> Result<Dec
     if bytes.len() as u64 > limit {
         return Err(());
     }
-    decode_sized(&bytes,size)
+    let image = decode_sized(&bytes,size)?;
+    if cacheable { disk::write(url, &bytes); }
+    Ok(image)
+}
+const WORKERS: usize = 8;
+const ICON_WORKERS: usize = 2;
+/// Downloaded pictures kept between launches in %LOCALAPPDATA%\Eclipse\image-cache, named by
+/// a hash of their address. Avatars, icons, decorations and nameplates have unique addresses
+/// per version, so a cached copy is always the right picture. Oldest files go past 300 MB.
+mod disk {
+    use sha2::{Digest, Sha256};
+    use std::path::PathBuf;
+    const LIMIT: u64 = 300 * 1024 * 1024;
+    pub(super) fn dir() -> Option<PathBuf> {
+        if cfg!(test) { return None; }
+        std::env::var_os("LOCALAPPDATA").map(|base| PathBuf::from(base).join("Eclipse").join("image-cache"))
+    }
+    pub(super) fn name(url: &str) -> String {
+        Sha256::digest(url.as_bytes()).iter().take(16).map(|b| format!("{b:02x}")).collect::<String>() + ".img"
+    }
+    pub(super) fn read(url: &str) -> Option<Vec<u8>> {
+        let path = dir()?.join(name(url));
+        if std::fs::metadata(&path).ok()?.len() > super::GIF_LIMIT { return None; }
+        std::fs::read(path).ok()
+    }
+    pub(super) fn write(url: &str, bytes: &[u8]) {
+        let Some(dir) = dir() else { return };
+        if std::fs::create_dir_all(&dir).is_err() { return; }
+        // Write then rename, so a crash never leaves half a picture behind.
+        let path = dir.join(name(url));
+        let partial = path.with_extension("part");
+        if std::fs::write(&partial, bytes).is_ok() && std::fs::rename(&partial, &path).is_err() {
+            let _ = std::fs::remove_file(partial);
+        }
+    }
+    /// Keeps the cache under its limit by removing the oldest pictures (run once at launch).
+    pub(super) fn prune() {
+        let Some(entries) = dir().and_then(|dir| std::fs::read_dir(dir).ok()) else { return };
+        let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = entries.flatten()
+            .filter_map(|entry| { let meta = entry.metadata().ok()?; meta.is_file().then(|| (meta.modified().unwrap_or(std::time::UNIX_EPOCH), meta.len(), entry.path())) })
+            .collect();
+        let mut total: u64 = files.iter().map(|f| f.1).sum();
+        if total <= LIMIT { return; }
+        files.sort_by_key(|f| f.0);
+        for (_, size, path) in files {
+            if total <= LIMIT * 4 / 5 { break; }
+            if std::fs::remove_file(path).is_ok() { total = total.saturating_sub(size); }
+        }
+    }
 }
 fn download(client: &reqwest::blocking::Client, url: &str) -> Result<Decoded, ()> {
     let (url,size)=source_key(url);
@@ -396,21 +451,26 @@ impl Images {
     pub fn new(ctx: &egui::Context) -> Self {
         let (tx, jobs) = bounded::<Job>(32);
         let (icon_tx,icon_jobs)=bounded::<Job>(32);
-        let (results, rx) = bounded::<Ready>(2);
+        // Room for a burst of finished pictures, so downloads never wait on the screen.
+        let (results, rx) = bounded::<Ready>(32);
         let cancel = Arc::new(AtomicBool::new(false));
-        for worker in 0..3 {
+        // One connection pool for every worker: pictures reuse open connections to Discord's CDN.
+        let shared = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(8))
+            .connect_timeout(Duration::from_secs(5))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .ok();
+        thread::spawn(disk::prune);
+        // Eight downloads at once (two kept for avatars and icons), instead of three.
+        for worker in 0..WORKERS {
             let (jobs, results, cancel, ctx) =
                 (jobs.clone(), results.clone(), cancel.clone(), ctx.clone());
             let icon_jobs=icon_jobs.clone();
+            let client = shared.clone();
             thread::spawn(move || {
-                let client = reqwest::blocking::Client::builder()
-                    .timeout(Duration::from_secs(8))
-                    .connect_timeout(Duration::from_secs(5))
-                    .redirect(reqwest::redirect::Policy::none())
-                    .build()
-                    .ok();
                 while !cancel.load(Ordering::Relaxed) {
-                    let next=if worker==2{icon_jobs.recv_timeout(Duration::from_millis(200))}else{
+                    let next=if worker>=WORKERS-ICON_WORKERS{icon_jobs.recv_timeout(Duration::from_millis(200))}else{
                         crossbeam_channel::select_biased!{recv(icon_jobs)->job=>job.map_err(|_|crossbeam_channel::RecvTimeoutError::Disconnected),recv(jobs)->job=>job.map_err(|_|crossbeam_channel::RecvTimeoutError::Disconnected),default(Duration::from_millis(200))=>Err(crossbeam_channel::RecvTimeoutError::Timeout)}
                     };
                     let job = match next {
@@ -831,6 +891,12 @@ mod tests {
         );
         assert!(!public_url("https://cdn.discordapp.com.evil.com/a.png"));
         assert!(!public_url("http://cdn.discordapp.com/a.png"));
+        // Cached pictures are named by a stable hash of their address.
+        let avatar="https://cdn.discordapp.com/avatars/1/abc.png?size=128";
+        assert_eq!(disk::name(avatar),disk::name(avatar));
+        assert_ne!(disk::name(avatar),disk::name("https://cdn.discordapp.com/avatars/1/abc.png?size=256"));
+        assert!(disk::name(avatar).len()==36&&disk::name(avatar).ends_with(".img"));
+        assert!(disk::dir().is_none(),"tests never touch the real cache");
         assert!(stream_preview_url("https://cdn.discordapp.com/stream-previews/abc123?version=7"));
         assert!(!public_url("https://cdn.discordapp.com/stream-previews/abc123?version=7"));
         assert!(!stream_preview_url("https://cdn.discordapp.com.evil.com/x") && !stream_preview_url("http://cdn.discordapp.com/x") && !stream_preview_url("https://evil.com/x"));
