@@ -1,5 +1,6 @@
 # Unreleased
 
+- After sending a message the message box stays ready to type the next one (it lost focus while the message was sending).
 - The Emoji and GIF panels share one fixed, larger size; opening GIFs no longer left the emoji panel small and stuck.
 - The GIF panel opens on Discord-style category tiles (Trending GIFs, then trending topics) with moving previews; clicking one shows its GIFs, and ← Categories goes back. GIFs show as larger two-column tiles.
 - Nitro uploads: files go through Discord's own upload flow (an upload slot, then a direct upload with no time limit), so large files up to your plan's limit work. Discord checks the limit before anything is sent; Eclipse's own ceiling is 1 GB. Uploads that took over 30 seconds used to fail.

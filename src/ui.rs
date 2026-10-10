@@ -1932,7 +1932,8 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         .desired_width((ui.available_width() - 154.0).max(60.0))
                         .frame(false);
                     let response = ui.add_enabled(!pending, edit);
-                    if self.focus_message_box{response.request_focus();self.focus_message_box=false;}
+                    // Waits while a message is sending: the box is disabled then and can't hold focus.
+                    if self.focus_message_box&&!pending{response.request_focus();self.focus_message_box=false;}
                     self.mention_popup(ctx, channel, &response, mention_keys);
                     let paste=response.has_focus()&&ctx.input(|i|i.focused)&&crate::clipboard::paste_keys_down();
                     if paste&&!self.paste_down{self.paste_attachment(&channel.id);}
@@ -1970,6 +1971,8 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             });
         });
         if send {
+            // Ready for the next message as soon as this one is sent, without clicking the box.
+            self.focus_message_box = true;
             self.send_message(channel);
         }
     }
@@ -2529,6 +2532,17 @@ mod interaction_tests {
         composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Key{key:egui::Key::Enter,physical_key:None,pressed:false,repeat:false,modifiers:Default::default()}]);
         composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Text("second".into()),enter(false)]);assert_eq!(app.messages.back().unwrap().content,"hello\nsecond");assert!(!app.drafts.contains_key(&channel.id));
         let sent=app.messages.len();composer_frame(&ctx,&mut app,&channel,vec![enter(false)]);assert_eq!(app.messages.len(),sent);
+        // After sending, the message box keeps focus so the next message can be typed at once.
+        composer_frame(&ctx,&mut app,&channel,vec![]);assert!(ctx.memory(|m|m.focused().is_some()),"the message box is still focused after sending");
+        composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Key{key:egui::Key::Enter,physical_key:None,pressed:false,repeat:false,modifiers:Default::default()}]);
+        composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Text("third".into()),enter(false)]);assert_eq!(app.messages.back().unwrap().content,"third");
+        // A real send disables the box until Discord answers; focus returns once it is done.
+        app.focus_message_box=true;app.pending=Some((channel.id.clone(),"slow".into()));
+        composer_frame(&ctx,&mut app,&channel,vec![]);composer_frame(&ctx,&mut app,&channel,vec![]);
+        app.pending=None;composer_frame(&ctx,&mut app,&channel,vec![]);
+        assert!(ctx.memory(|m|m.focused().is_some()),"focus comes back when the send finishes");
+        composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Key{key:egui::Key::Enter,physical_key:None,pressed:false,repeat:false,modifiers:Default::default()}]);
+        composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Text("fourth".into()),enter(false)]);assert_eq!(app.messages.back().unwrap().content,"fourth");
     }
     #[test]fn both_settings_panels_close_on_outside_click_and_keep_inside_clicks(){
         for server in [false,true]{let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);app.settings=!server;app.server_settings=server;
