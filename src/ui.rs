@@ -360,7 +360,8 @@ impl Eclipse {
         if !self.preview{return;}
         match section {
             "timestamps"=>{self.messages.drain(..self.messages.len().saturating_sub(3));for(message,days)in self.messages.iter_mut().rev().zip(0..3){message.timestamp=crate::message_time::preview_timestamp(days);}},
-            "emoji"|"gifs"=>{if let Some(channel)=&self.channel{self.picker.open(if section=="emoji"{crate::media_picker::Mode::Emoji}else{crate::media_picker::Mode::Gif},&channel.id,self.guild.as_deref(),egui::Rect::from_min_size(egui::pos2(960.,780.),Vec2::splat(30.)));}},
+            "emoji"|"gifs"=>{if let Some(channel)=&self.channel{self.picker.open(if section=="emoji"{crate::media_picker::Mode::Emoji}else{crate::media_picker::Mode::Gif},&channel.id,self.guild.as_deref(),egui::Rect::from_min_size(egui::pos2(960.,780.),Vec2::splat(30.)));}if section=="gifs"{self.picker.set_categories([crate::media_picker::TRENDING,"hello","lol","love","happy birthday","thank you"].iter().map(|n|(n.to_string(),String::new())).collect());}},
+
             "link-preview"=>{if let (Some(user),Some(last))=(self.user.clone(),self.messages.back().cloned()){let link="https://stremio-addons.net/addons/magnetflix";let mut message=Message{id:"link-preview".into(),author:user,content:link.into(),..last};message.referenced_message=None;message.reactions.clear();message.attachments.clear();message.embeds=vec![crate::model::Embed{kind:"rich".into(),title:Some("Magnetflix".into()),description:Some("Addon de filmes, séries e animes dublados e legendados em Português (PT-BR)".into()),url:Some(link.into()),color:Some(0xb06cf0),provider:Some(crate::model::EmbedName{name:Some("Stremio Addons".into()),url:None}),..Default::default()}];self.messages.push_back(message);}},
             "update-prompt"=>self.updater.preview(false),
             "update-button"=>self.updater.preview(true),
@@ -572,6 +573,9 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     if self.picker.guild.as_deref() == Some(&guild) {
                         self.picker.emojis = emojis;
                     }
+                }
+                Event::GifCategories(categories) => {
+                    self.picker.set_categories(categories);
                 }
                 Event::Gifs(query, gifs) => {
                     if self.picker.requested == query {

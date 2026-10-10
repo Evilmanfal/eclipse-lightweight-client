@@ -94,6 +94,8 @@ pub enum Command {
     Refresh,
     Emojis(String),
     Gifs(String),
+    /// Discord's GIF home: trending categories with preview pictures.
+    GifCategories,
     Ring(String, Arc<AtomicU64>, u64),
 }
 
@@ -122,6 +124,7 @@ pub enum Event {
     Signal(String, Value),
     Emojis(String, Vec<crate::media_picker::CustomEmoji>),
     Gifs(String, Vec<crate::media_picker::Gif>),
+    GifCategories(Vec<(String, String)>),
     Ringing,
 }
 
@@ -473,22 +476,37 @@ impl Api {
                 self.request(Method::GET, &format!("/guilds/{guild}/emojis"), None, None)?,
             ),
             Command::Gifs(query) => {
+                let trending = query == crate::media_picker::TRENDING;
                 let mut url = reqwest::Url::parse("https://discord.com/gifs/search").unwrap();
-                url.query_pairs_mut()
-                    .append_pair("q", &query)
-                    .append_pair("media_format", "tinygif")
-                    .append_pair("provider", "klipy")
-                    .append_pair("locale", "en-US")
-                    .append_pair("limit", "20");
+                {
+                    let mut pairs = url.query_pairs_mut();
+                    if !trending { pairs.append_pair("q", &query); }
+                    pairs
+                        .append_pair("media_format", "tinygif")
+                        .append_pair("provider", "klipy")
+                        .append_pair("locale", "en-US")
+                        .append_pair("limit", "40");
+                }
+                let route = if trending { "/gifs/trending-gifs" } else { "/gifs/search" };
                 Event::Gifs(
                     query,
                     self.request(
                         Method::GET,
-                        &format!("/gifs/search?{}", url.query().unwrap_or_default()),
+                        &format!("{route}?{}", url.query().unwrap_or_default()),
                         None,
                         None,
                     )?,
                 )
+            }
+            Command::GifCategories => {
+                // A failed home just shows the search hint instead of a spinner.
+                let home: Value = self.request(
+                    Method::GET,
+                    "/gifs/trending?provider=klipy&locale=en-US&media_format=tinygif",
+                    None,
+                    None,
+                ).unwrap_or(Value::Null);
+                Event::GifCategories(crate::media_picker::categories(&home))
             }
             Command::Ring(channel, intent, epoch) => {
                 if intent.load(Ordering::Acquire) != epoch {
