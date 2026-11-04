@@ -196,6 +196,38 @@ pub fn menu_item(ui:&mut egui::Ui,text:&str,icon:&str,danger:bool)->egui::Respon
     response
 }
 pub fn menu_separator(ui:&mut egui::Ui){ui.add_space(3.);let (rect,_)=ui.allocate_exact_size(Vec2::new(ui.available_width(),1.),Sense::hover());ui.painter().rect_filled(rect.shrink2(Vec2::new(6.,0.)),0,Color32::from_gray(48));ui.add_space(3.);}
+/// Small rounded status pill, tinted with `color`.
+pub fn badge(ui:&mut egui::Ui,text:&str,color:Color32){
+    let [r,g,b,_]=color.to_array();
+    egui::Frame::NONE.fill(Color32::from_rgba_unmultiplied(r,g,b,38)).corner_radius(10).inner_margin(egui::Margin::symmetric(8,2))
+        .show(ui,|ui|{ui.label(RichText::new(text).size(11.5).strong().color(color.lerp_to_gamma(Color32::WHITE,0.25)));});
+}
+/// Rounded square icon with a letter or glyph, for services and apps without artwork.
+pub fn letter_icon(ui:&mut egui::Ui,size:f32,text:&str,fill:Color32)->egui::Rect{
+    let (rect,_)=ui.allocate_exact_size(Vec2::splat(size),Sense::hover());
+    ui.painter().rect_filled(rect,size*0.28,fill);
+    ui.painter().text(rect.center(),egui::Align2::CENTER_CENTER,text,FontId::proportional(size*0.45),Color32::WHITE);
+    rect
+}
+/// Item card used by account lists: icon on the left, text in the middle, `trailing` on the right.
+pub fn item_card(ui:&mut egui::Ui,icon:impl FnOnce(&mut egui::Ui),body:impl FnOnce(&mut egui::Ui),trailing:impl FnOnce(&mut egui::Ui)){
+    egui::Frame::NONE.fill(Color32::from_gray(30)).stroke(Stroke::new(1_f32,Color32::from_gray(40))).corner_radius(12).inner_margin(egui::Margin::symmetric(14,12)).show(ui,|ui|{
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui|{ui.spacing_mut().item_spacing.x=12.;icon(ui);
+            ui.vertical(|ui|{ui.set_max_width((ui.available_width()-150.).max(140.));ui.spacing_mut().item_spacing.y=3.;body(ui);});
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{ui.spacing_mut().item_spacing.x=6.;trailing(ui);});
+        });
+    });
+    ui.add_space(8.);
+}
+/// Centered empty-state card with a glyph, title and hint.
+pub fn empty_state(ui:&mut egui::Ui,glyph:&str,title:&str,hint:&str){
+    egui::Frame::NONE.fill(Color32::from_gray(27)).stroke(Stroke::new(1_f32,Color32::from_gray(40))).corner_radius(12).inner_margin(egui::Margin::symmetric(20,28)).show(ui,|ui|{
+        ui.set_width(ui.available_width());
+        ui.vertical_centered(|ui|{ui.label(RichText::new(glyph).size(34.));ui.add_space(6.);ui.label(RichText::new(title).size(16.).strong().color(TITLE));ui.label(RichText::new(hint).size(13.).color(HINT));});
+    });
+    ui.add_space(8.);
+}
 pub fn card(ui:&mut egui::Ui,content:impl FnOnce(&mut egui::Ui)){
     ui.vertical(|ui|{ui.set_width(ui.available_width());style(ui);content(ui);});
 }

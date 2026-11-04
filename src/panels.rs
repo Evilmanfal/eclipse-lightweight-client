@@ -40,6 +40,8 @@ impl Eclipse {
             "save-profile"=>{if let Ok(user)=serde_json::from_value::<User>(data){self.user=Some(user);}self.load_my_profile();return;},
             "save-role"|"create-role"|"member-role"=>{self.load_roles();self.refresh_members();return;},
             "save-server"=>{if data["id"].as_str()!=Some(&self.server.id){return;}self.server.metadata=data.clone();self.server_edit=data.clone();if let Some(guild)=self.guilds.iter_mut().find(|g|g.id==self.server.id){if let Some(name)=data["name"].as_str(){guild.name=name.into();}if data.get("icon").is_some(){guild.icon=data["icon"].as_str().map(str::to_owned);}}return;},
+            "connections-write"=>{self.request_feature("connections","/users/@me/connections".into());return;},
+            "authorized-apps-write"=>{self.request_feature("authorized-apps","/oauth2/tokens".into());return;},
             "read-all"=>{self.unread.clear();self.features.insert(key,json!({"saved":true}));return;},
             "relationship"=>{self.request_feature("friends","/users/@me/relationships".into());return;},
             "save-notifications"=>{let key=format!("server:{}:Notifications",self.server.id);self.features.insert(key,data);return;},
@@ -339,7 +341,7 @@ impl Eclipse {
                 ui.add_space(14.);if sl::primary(ui,"Save account settings",!self.feature_pending.contains("save-settings")).clicked(){let base=self.features.get("settings").cloned().unwrap_or(Value::Null);let changes=delta(&base,&self.settings_edit);self.mutate("save-settings",Method::PATCH,"/users/@me/settings".into(),Some(changes));}self.feature_status(ui,"save-settings");
                 }else if ui.button("Load account settings").clicked(){self.request_feature("settings","/users/@me/settings".into());}
             }
-            "Connections"|"Devices"|"Authorized Apps"|"Gift Inventory"|"Server Boost"|"Subscriptions"=>{let key=match page.as_str(){"Connections"=>"connections","Devices"=>"devices","Authorized Apps"=>"authorized-apps","Gift Inventory"=>"inventory","Server Boost"=>"boosts",_=>"subscriptions"};self.feature_status(ui,key);if let Some(data)=self.features.get(key).cloned(){account_cards(ui,&data,&page,self.prefs.developer);}if ui.button("⟳  Refresh").clicked(){self.load_settings_section();}sl::divider(ui);sl::help(ui,"Connection authorization, device revocation and subscription billing use Discord's secure account flow.");link(ui,"Manage in Discord","https://discord.com/channels/@me");}
+            "Connections"|"Devices"|"Authorized Apps"|"Gift Inventory"|"Server Boost"|"Subscriptions"=>self.account_page(ui,&page),
             "Nitro"=>self.nitro_content(ui),
             "Billing"=>{sl::section(ui,"Payment Methods");sl::help(ui,"Manage payment methods and receipts through Discord's secure checkout. Eclipse never collects card details or purchases automatically.");link(ui,"Open Discord billing","https://discord.com/channels/@me");},
             "Family Center"=>{sl::section(ui,"Family Center");sl::help(ui,"Family links, supervision and age verification must be completed in Discord.");link(ui,"Open Family Center help","https://support.discord.com/hc/en-us/categories/15878301948823-Family-Center");},
@@ -389,6 +391,92 @@ impl Eclipse {
             }
             _=>{}
         }
+    }
+    /// Offline preview samples for the account list pages.
+    pub(super) fn preview_account_data(&mut self){
+        self.features.insert("connections".into(),json!([{"type":"spotify","id":"a","name":"lionsden_music","verified":true,"visibility":1,"show_activity":true},{"type":"steam","id":"b","name":"Evilmanfal","verified":true,"visibility":1,"show_activity":true},{"type":"github","id":"c","name":"Evilmanfal","verified":true,"visibility":0}]));
+        self.features.insert("devices".into(),json!({"user_sessions":[{"id_hash":"1","current":true,"client_info":{"os":"Windows","platform":"Discord Client","location":"Toronto, Ontario, Canada"}},{"id_hash":"2","approx_last_used_time":"2026-11-03T21:14:00Z","client_info":{"os":"iOS","platform":"Discord iOS","location":"Toronto, Ontario, Canada"}},{"id_hash":"3","approx_last_used_time":"2026-10-28T09:02:00Z","client_info":{"os":"Windows","platform":"Chrome","location":"Mississauga, Ontario, Canada"}}]}));
+        self.features.insert("authorized-apps".into(),json!([{"id":"t1","scopes":["identify","guilds","guilds.join"],"application":{"id":"1","name":"Carl-bot","description":"Reaction roles, automod, logging and custom commands for your server.","bot_public":true}},{"id":"t2","scopes":["identify","email"],"application":{"id":"2","name":"Medal","description":"Clip and share your best gaming moments."}}]));
+    }
+    /// Connections, Devices, Authorized Apps, Gifts, Boosts and Subscriptions, laid out like Discord's pages.
+    fn account_page(&mut self,ui:&mut egui::Ui,page:&str){
+        let key=match page{"Connections"=>"connections","Devices"=>"devices","Authorized Apps"=>"authorized-apps","Gift Inventory"=>"inventory","Server Boost"=>"boosts",_=>"subscriptions"};
+        let data=self.features.get(key).cloned();
+        let items:Vec<Value>=data.as_ref().and_then(|d|d.as_array().or_else(||d["user_sessions"].as_array()).cloned()).unwrap_or_default().into_iter().take(100).collect();
+        let green=Color32::from_rgb(35,165,90);let red=Color32::from_rgb(242,95,100);let grey=Color32::from_gray(170);let accent=sl::accent(ui.ctx());
+        if page=="Connections"{
+            egui::Frame::NONE.fill(Color32::from_gray(30)).stroke(Stroke::new(1_f32,Color32::from_gray(40))).corner_radius(12).inner_margin(16).show(ui,|ui|{ui.set_width(ui.available_width());
+                ui.label(RichText::new("Add accounts to your profile").size(15.).strong().color(TEXT));
+                ui.label(RichText::new("This information will not be shared outside of Discord without your permission.").size(12.5).color(MUTED));ui.add_space(8.);
+                ui.horizontal_wrapped(|ui|{ui.spacing_mut().item_spacing=Vec2::new(8.,8.);for service in ["spotify","steam","github","youtube","twitch","xbox","playstation","battlenet","riotgames","reddit","bluesky","crunchyroll"]{let (label,color)=service_style(service);let rect=sl::letter_icon(ui,38.,&label.chars().next().unwrap_or('?').to_string(),color);let response=ui.interact(rect,ui.id().with(service),egui::Sense::click()).on_hover_text(format!("Connect {label} in Discord"));if response.hovered(){ui.painter().rect_stroke(rect,10,Stroke::new(2_f32,Color32::WHITE),egui::StrokeKind::Outside);}if response.clicked(){ui.ctx().open_url(egui::OpenUrl::new_tab("https://discord.com/channels/@me"));}}});
+            });
+            ui.add_space(16.);
+        }
+        if page=="Devices"{sl::help(ui,"Here are all the devices currently signed in with your Discord account. Log out of any you don't recognize in Discord.");ui.add_space(10.);}
+        if page=="Authorized Apps"{sl::help(ui,"Apps you have signed in to with Discord. Deauthorize any you no longer use.");ui.add_space(10.);}
+        self.feature_status(ui,key);
+        if data.is_some()&&items.is_empty(){
+            let (glyph,title,hint)=match page{"Connections"=>("🔗","No connected accounts yet","Pick a service above to connect it in Discord."),"Devices"=>("💻","No other devices","Only this device is signed in."),"Authorized Apps"=>("🧩","No authorized apps","Apps you sign in to with Discord will appear here."),"Gift Inventory"=>("🎁","No gifts yet","Gifts you receive or buy will appear here."),"Server Boost"=>("🚀","No boosts","Boost a server to unlock perks for its members."),_=>("⭐","No subscriptions","Nitro and server subscriptions will appear here.")};
+            sl::empty_state(ui,glyph,title,hint);
+        }
+        match page{
+            "Connections"=>for(index,item)in items.iter().enumerate(){ui.push_id(index,|ui|{
+                let service=item["type"].as_str().unwrap_or("").to_owned();let id=item["id"].as_str().unwrap_or("").to_owned();let (label,color)=service_style(&service);
+                egui::Frame::NONE.fill(Color32::from_gray(30)).stroke(Stroke::new(1_f32,Color32::from_gray(40))).corner_radius(12).inner_margin(egui::Margin{left:16,right:16,top:14,bottom:4}).show(ui,|ui|{ui.set_width(ui.available_width());
+                    ui.horizontal(|ui|{ui.spacing_mut().item_spacing.x=12.;sl::letter_icon(ui,40.,&label.chars().next().unwrap_or('?').to_string(),color);
+                        ui.vertical(|ui|{ui.spacing_mut().item_spacing.y=2.;ui.horizontal(|ui|{ui.label(RichText::new(item["name"].as_str().unwrap_or("Connected account")).size(15.).strong().color(TEXT));if item["verified"].as_bool()==Some(true){sl::badge(ui,"✓ Verified",green);}if item["revoked"].as_bool()==Some(true){sl::badge(ui,"Revoked",red);}});ui.label(RichText::new(&label).size(12.5).color(MUTED));});
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{if ui.add(egui::Button::new(RichText::new("✕").size(14.).color(MUTED)).frame(false)).on_hover_text("Remove connection").clicked()&&!id.is_empty(){self.confirm=Some((format!("Remove your {label} connection?"),Command::Request{key:"connections-write".into(),method:Method::DELETE,route:format!("/users/@me/connections/{service}/{id}"),body:None}));}});
+                    });
+                    ui.add_space(10.);let (line,_)=ui.allocate_exact_size(Vec2::new(ui.available_width(),1.),egui::Sense::hover());ui.painter().rect_filled(line,0,Color32::from_gray(44));ui.add_space(10.);
+                    let mut changes=json!({});
+                    let mut visible=item["visibility"].as_u64()==Some(1);if sl::toggle_row(ui,"Display on profile","",&mut visible){changes["visibility"]=json!(u8::from(visible));}
+                    if item.get("show_activity").is_some(){let mut activity=item["show_activity"].as_bool()==Some(true);if sl::toggle_row(ui,&format!("Display {label} as your status"),"",&mut activity){changes["show_activity"]=json!(activity);}}
+                    if changes.as_object().is_some_and(|o|!o.is_empty())&&!id.is_empty(){
+                        if let Some(list)=self.features.get_mut(key).and_then(Value::as_array_mut){if let Some(entry)=list.get_mut(index){for(k,v)in changes.as_object().unwrap(){entry[k]=v.clone();}}}
+                        self.mutate("connections-write",Method::PATCH,format!("/users/@me/connections/{service}/{id}"),Some(changes));
+                    }
+                });ui.add_space(10.);
+            });},
+            "Devices"=>{
+                let (current,others):(Vec<_>,Vec<_>)=items.iter().partition(|i|i["current"].as_bool()==Some(true));
+                for(title,group)in[("Current Device",current),("Other Devices",others)]{if group.is_empty(){continue;}sl::label(ui,title);ui.add_space(2.);
+                    for(index,item)in group.iter().enumerate(){ui.push_id((title,index),|ui|{
+                        let info=&item["client_info"];let os=info["os"].as_str().unwrap_or("Unknown");let platform=info["platform"].as_str().unwrap_or("");
+                        let glyph=match os.to_lowercase().as_str(){"ios"|"android"=>"📱",_ if !platform.is_empty()&&!platform.to_lowercase().contains("discord")=>"🌐",_=>"💻"};
+                        sl::item_card(ui,|ui|{let (rect,_)=ui.allocate_exact_size(Vec2::splat(40.),egui::Sense::hover());ui.painter().circle_filled(rect.center(),20.,Color32::from_gray(46));ui.painter().text(rect.center(),egui::Align2::CENTER_CENTER,glyph,egui::FontId::proportional(18.),TEXT);},
+                            |ui|{ui.label(RichText::new(if platform.is_empty(){os.to_uppercase()}else{format!("{} · {}",os.to_uppercase(),platform.to_uppercase())}).size(13.5).strong().color(TEXT));
+                                let mut line=info["location"].as_str().unwrap_or("Unknown location").to_owned();if item["current"].as_bool()!=Some(true){if let Some(date)=item["approx_last_used_time"].as_str(){line+=&format!("  •  {}",nice_date(date));}}ui.label(RichText::new(line).size(12.5).color(MUTED));},
+                            |ui|{if item["current"].as_bool()==Some(true){sl::badge(ui,"This device",accent);}});
+                    });}
+                    ui.add_space(10.);
+                }
+            }
+            "Authorized Apps"=>for(index,item)in items.iter().enumerate(){ui.push_id(index,|ui|{
+                let app=&item["application"];let name=app["name"].as_str().unwrap_or("Connected app").to_owned();let token=item["id"].as_str().unwrap_or("").to_owned();
+                let icon_url=app["id"].as_str().zip(app["icon"].as_str()).map(|(id,icon)|format!("https://cdn.discordapp.com/app-icons/{id}/{icon}.png?size=64"));
+                egui::Frame::NONE.fill(Color32::from_gray(30)).stroke(Stroke::new(1_f32,Color32::from_gray(40))).corner_radius(12).inner_margin(16).show(ui,|ui|{ui.set_width(ui.available_width());
+                    ui.horizontal(|ui|{ui.spacing_mut().item_spacing.x=12.;let rect=sl::letter_icon(ui,44.,&name.chars().next().unwrap_or('?').to_uppercase().to_string(),Color32::from_rgb(88,101,242));if icon_url.is_some(){self.paint_image(ui,rect,icon_url.clone(),12);}
+                        ui.vertical(|ui|{ui.add_space(4.);ui.horizontal(|ui|{ui.label(RichText::new(&name).size(16.).strong().color(TEXT));if app["bot_public"].as_bool()==Some(true){sl::badge(ui,"APP",accent);}});});
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{if ui.add(egui::Button::new(RichText::new("Deauthorize").color(red)).fill(Color32::TRANSPARENT).stroke(Stroke::new(1_f32,red)).corner_radius(8)).clicked()&&!token.is_empty(){self.confirm=Some((format!("Deauthorize {name}? It will lose access to your account."),Command::Request{key:"authorized-apps-write".into(),method:Method::DELETE,route:format!("/oauth2/tokens/{token}"),body:None}));}});
+                    });
+                    if let Some(description)=app["description"].as_str().filter(|d|!d.is_empty()){ui.add_space(12.);sl::label(ui,"About this app");let short:String=description.chars().take(220).collect();ui.label(RichText::new(if description.chars().count()>220{short+"…"}else{short}).size(13.).color(Color32::from_gray(210)));}
+                    if let Some(scopes)=item["scopes"].as_array().filter(|s|!s.is_empty()){ui.add_space(12.);sl::label(ui,"Permissions");
+                        for scope in scopes.iter().filter_map(Value::as_str){ui.horizontal(|ui|{let (rect,_)=ui.allocate_exact_size(Vec2::splat(16.),egui::Sense::hover());ui.painter().circle_filled(rect.center(),8.,green);let c=rect.center();let s=Stroke::new(1.6_f32,Color32::WHITE);ui.painter().line_segment([c+Vec2::new(-3.5,0.),c+Vec2::new(-1.,2.5)],s);ui.painter().line_segment([c+Vec2::new(-1.,2.5),c+Vec2::new(3.5,-2.5)],s);ui.label(RichText::new(scope_label(scope)).size(13.).color(Color32::from_gray(210)));});}
+                    }
+                });ui.add_space(10.);
+            });},
+            _=>for(index,item)in items.iter().enumerate(){ui.push_id(index,|ui|{
+                let title=item["subscription_plan"]["name"].as_str().or_else(||item["guild"]["name"].as_str()).or_else(||item["sku"]["name"].as_str()).or_else(||item["name"].as_str()).unwrap_or(match page{"Server Boost"=>"Server boost","Gift Inventory"=>"Gift",_=>"Discord subscription"});
+                let glyph=match page{"Server Boost"=>"🚀","Gift Inventory"=>"🎁",_=>"⭐"};
+                sl::item_card(ui,|ui|{sl::letter_icon(ui,40.,glyph,Color32::from_rgb(120,72,180));},
+                    |ui|{ui.label(RichText::new(title).size(15.).strong().color(TEXT));for(field,label)in[("current_period_end","Renews"),("expires_at","Expires"),("cooldown_ends_at","Available again"),("created_at","Added")]{if let Some(date)=item[field].as_str(){ui.label(RichText::new(format!("{label} {}",nice_date(date))).size(12.5).color(MUTED));break;}}},
+                    |ui|{if item["cancel_at_period_end"].as_bool()==Some(true)||item["canceled"].as_bool()==Some(true){sl::badge(ui,"Cancels at period end",red);}else if item["status"].as_u64()==Some(1)||item["active"].as_bool()==Some(true){sl::badge(ui,"Active",green);}if item["available"].as_bool()==Some(false){sl::badge(ui,"Unavailable",grey);}});
+            });},
+        }
+        for write in ["connections-write","authorized-apps-write"]{self.feature_status(ui,write);}
+        if self.prefs.developer&&!items.is_empty(){ui.collapsing("Technical details",|ui|{for item in &items{for key in ["id","type","status"]{if let Some(value)=item.get(key){ui.label(format!("{key}: {value}"));}}}});}
+        sl::divider(ui);
+        ui.horizontal(|ui|{if ui.button("⟳  Refresh").clicked(){self.load_settings_section();}ui.add_space(6.);link(ui,"Manage in Discord","https://discord.com/channels/@me");});
     }
     fn theme_swatches(&mut self,ui:&mut egui::Ui){
         ui.horizontal_wrapped(|ui|{ui.spacing_mut().item_spacing=Vec2::new(14.,14.);
@@ -453,3 +541,19 @@ fn account_cards(ui:&mut egui::Ui,data:&Value,page:&str,developer:bool){
 fn language_picker(ui:&mut egui::Ui,value:&mut Value,key:&str){let mut selected=value[key].as_str().unwrap_or("en-US").to_owned();let choices=[("en-US","English (United States)"),("en-GB","English (United Kingdom)"),("fr","Français"),("de","Deutsch"),("es-ES","Español"),("pt-BR","Português (Brasil)"),("ja","日本語"),("ko","한국어"),("zh-CN","简体中文"),("ru","Русский"),("uk","Українська"),("it","Italiano"),("nl","Nederlands"),("pl","Polski"),("tr","Türkçe")];sl::label(ui,"Language");egui::ComboBox::from_id_salt(key).width(ui.available_width().min(340.)).selected_text(choices.iter().find(|(code,_)|*code==selected).map(|(_,label)|*label).unwrap_or("Current account language")).show_ui(ui,|ui|{for(code,label)in choices{ui.selectable_value(&mut selected,code.into(),label);}});value[key]=json!(selected);}
 fn suppression_label(p:voice_model::voice_settings::NoiseSuppression)->&'static str{use voice_model::voice_settings::NoiseSuppression::*;match p{Off=>"Off",RnNoise=>"Enhanced noise reduction",WebRtc=>"Standard noise reduction"}}
 fn audit_action(n:u64)->&'static str{match n{1=>"Server updated",10=>"Channel created",11=>"Channel updated",12=>"Channel deleted",20=>"Member kicked",22=>"Member banned",23=>"Member unbanned",24=>"Member updated",25=>"Member roles updated",30=>"Role created",31=>"Role updated",32=>"Role deleted",40=>"Invite created",41=>"Invite updated",42=>"Invite deleted",60=>"Emoji created",61=>"Emoji updated",62=>"Emoji deleted",72=>"Message deleted",73=>"Messages deleted",74=>"Message pinned",75=>"Message unpinned",_=>"Server activity"}}
+/// Display name and brand colour for a Discord connection type.
+fn service_style(service:&str)->(String,Color32){
+    let rgb=Color32::from_rgb;
+    let (name,color)=match service{"spotify"=>("Spotify",rgb(30,185,84)),"steam"=>("Steam",rgb(42,71,94)),"github"=>("GitHub",rgb(36,41,47)),"youtube"=>("YouTube",rgb(230,33,23)),"twitch"=>("Twitch",rgb(145,70,255)),"xbox"=>("Xbox",rgb(16,124,16)),"playstation"=>("PlayStation",rgb(0,55,145)),"reddit"=>("Reddit",rgb(255,69,0)),"twitter"=>("X",rgb(20,20,20)),"battlenet"=>("Battle.net",rgb(20,142,255)),"epicgames"=>("Epic Games",rgb(49,49,49)),"riotgames"=>("Riot Games",rgb(209,54,57)),"leagueoflegends"=>("League of Legends",rgb(194,143,44)),"tiktok"=>("TikTok",rgb(255,0,80)),"instagram"=>("Instagram",rgb(225,48,108)),"facebook"=>("Facebook",rgb(24,119,242)),"domain"=>("Domain",rgb(88,101,242)),"paypal"=>("PayPal",rgb(0,48,135)),"ebay"=>("eBay",rgb(229,50,56)),"crunchyroll"=>("Crunchyroll",rgb(244,117,33)),"roblox"=>("Roblox",rgb(226,35,26)),"bluesky"=>("Bluesky",rgb(17,133,254)),"bungie"=>("Bungie.net",rgb(11,122,209)),"mastodon"=>("Mastodon",rgb(99,100,255)),_=>("",rgb(78,80,88))};
+    (if name.is_empty(){friendly_name(service)}else{name.into()},color)
+}
+/// "2026-11-03T..." becomes "Nov 3, 2026".
+fn nice_date(date:&str)->String{
+    let parts:Vec<u32>=date.get(..10).unwrap_or("").split('-').filter_map(|p|p.parse().ok()).collect();
+    match parts[..]{[y,m@1..=12,d]=>format!("{} {d}, {y}",["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][m as usize-1]),_=>date.get(..10).unwrap_or(date).to_owned()}
+}
+/// OAuth scope as the permission Discord describes.
+fn scope_label(scope:&str)->String{match scope{"identify"=>"Access your username, avatar and banner".into(),"email"=>"Access your email address".into(),"guilds"=>"Know what servers you're in".into(),"guilds.join"=>"Join servers for you".into(),"guilds.members.read"=>"Read your server member info".into(),"connections"=>"Access your third-party connections".into(),"bot"=>"Add a bot to a server".into(),"applications.commands"=>"Create commands".into(),"rpc"=>"Talk to your Discord client".into(),"messages.read"=>"Read your messages".into(),"activities.write"=>"Update your activity".into(),"role_connections.write"=>"Update your linked roles".into(),other=>friendly_name(&other.replace('.',"_"))}}
+#[cfg(test)]mod account_tests{use super::*;
+    #[test]fn dates_and_services_read_naturally(){assert_eq!(nice_date("2026-11-03T14:01:00Z"),"Nov 3, 2026");assert_eq!(nice_date("bad"),"bad");assert_eq!(service_style("github").0,"GitHub");assert_eq!(service_style("new_service").0,"New Service");assert_eq!(scope_label("guilds.join"),"Join servers for you");}
+}

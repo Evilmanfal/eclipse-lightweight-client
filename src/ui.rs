@@ -389,7 +389,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             "inline-logs"=>{if let Some(old)=self.messages.get(self.messages.len().saturating_sub(2)).cloned(){self.log_message(old.clone(),false);let index=self.messages.len().saturating_sub(2);if let Some(message)=self.messages.get_mut(index){message.content="The updated message stays right here in the conversation.".into();message.edited_timestamp=Some("edited".into());}}if let Some(deleted)=self.messages.back().cloned(){self.log_message(deleted.clone(),true);self.messages.retain(|m|m.id!=deleted.id);}},
             "voice-sidebar"=>{if let(Some(channel),Some(user))=(self.channels.iter().find(|c|c.kind==2).cloned(),self.user.clone()){self.calls.preview(channel,user,vec![]);self.calls.chat=true;}},
             "voice"|"plugins"|"themes"|"performance"=>{self.settings=true;self.settings_page=match section{"voice"=>"Voice & Video","plugins"=>"Plugins","themes"=>"Themes",_=>"Performance"}.into();},
-            s if s.starts_with("settings:")=>{self.settings=true;self.settings_page=s["settings:".len()..].into();self.load_settings_section();},
+            s if s.starts_with("settings:")=>{self.settings=true;self.settings_page=s["settings:".len()..].into();self.load_settings_section();self.preview_account_data();},
             s if s.starts_with("server:")=>{self.server_settings=true;self.server_page=s["server:".len()..].into();self.load_server_page();},
             "server-settings"=>{self.server_settings=true;self.server_page="Overview".into();},
             "roles"=>{self.server_settings=true;self.server_page="Roles".into();},
