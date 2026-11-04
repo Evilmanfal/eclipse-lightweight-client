@@ -166,6 +166,14 @@ pub struct Message {
     /// Users mentioned in the message, so <@id> can be shown as a name.
     #[serde(default)]
     pub mentions: Vec<User>,
+    /// Buttons, select menus and Components V2 layouts sent by apps and bots.
+    #[serde(default)]
+    pub components: Vec<serde_json::Value>,
+    /// Slash command that produced this message (who used which command).
+    #[serde(default)]
+    pub interaction_metadata: Option<serde_json::Value>,
+    #[serde(default)]
+    pub interaction: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

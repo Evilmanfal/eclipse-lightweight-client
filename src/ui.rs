@@ -378,6 +378,10 @@ impl Eclipse {
             "server-zoom"=>{self.prefs.zoom=1.5;self.server_settings=true;},
             "quick-actions"=>{self.preview_gesture=Some("message");if let Some(message)=self.messages.back_mut(){if let Some(user)=&self.user{message.author=user.clone();}}},
             "server-hover"=>self.preview_gesture=Some("server"),
+            "app-message"=>{if let Some(last)=self.messages.back().cloned(){let mut bot=last.author.clone();bot.id="keto".into();bot.username="keto".into();bot.global_name=Some("Keto".into());let mut message=Message{id:"app-message".into(),author:bot,content:String::new(),edited_timestamp:Some("2026-11-03T14:02:00Z".into()),..last};message.referenced_message=None;message.reactions.clear();message.attachments.clear();message.embeds.clear();
+                message.interaction_metadata=Some(serde_json::json!({"name":"config","user":{"id":"3","username":"husain"}}));
+                message.components=serde_json::from_value(serde_json::json!([{"type":17,"components":[{"type":10,"content":"# 🔗 Autofix Configuration\nConfigure which social platforms have link fixing enabled."},{"type":14,"divider":true,"spacing":1},{"type":1,"components":[{"type":3,"custom_id":"a","placeholder":"Autofix","options":[{"label":"Autofix","value":"a","default":true,"emoji":{"name":"🔗"}}]}]},{"type":1,"components":[{"type":3,"custom_id":"b","options":[{"label":"X","value":"x","default":true,"emoji":{"name":"🟢"}}]}]},{"type":1,"components":[{"type":2,"style":4,"label":"Disable X","custom_id":"c"}]}]}])).unwrap_or_default();
+                self.messages.push_back(message);}},
             "server-menu"=>{self.preview_gesture=Some("server-menu");self.prefs.developer=true;},
             "full-profile"=>{if let Some(mut user)=self.messages.front().map(|m|m.author.clone()){user.display_name_styles=Some(serde_json::json!({"font_id":14,"effect_id":2,"colors":[12034809,4437965]}));self.open_full_profile(&user);let key=crate::ui::panels::profile_key_for(&user.id,self.full_profile_guild.as_deref());self.features.insert(key,serde_json::json!({"user_profile":{"pronouns":"they / them","bio":"Building little things with good people.
 A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member":{"joined_at":"2021-10-13T00:00:00Z"},"connected_accounts":[{"type":"twitch","name":"eclipse","verified":true},{"type":"xbox","name":"Eclipse"}]}));}},
@@ -753,6 +757,11 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                                 if let Some(items) = data.get("embeds") {
                                     if let Ok(embeds) = serde_json::from_value(items.clone()) {
                                         message.embeds = embeds;
+                                    }
+                                }
+                                if let Some(items) = data.get("components") {
+                                    if let Ok(components) = serde_json::from_value(items.clone()) {
+                                        message.components = components;
                                     }
                                 }
                                 if let Some(items) = data.get("attachments") {
@@ -1704,6 +1713,13 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             .inner_margin(egui::Margin::symmetric(8, if grouped { 0 } else if self.compact { 2 } else { 4 }))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
+                if let Some((who, command)) = crate::components::command_use(message).filter(|_| message.referenced_message.is_none()) {
+                    ui.horizontal(|ui| {
+                        ui.add_space(49.0);
+                        ui.label(RichText::new(format!("{who} used")).size(12.0).color(MUTED));
+                        ui.label(RichText::new(format!("/{command}")).size(12.0).color(self.accent()));
+                    });
+                }
                 if let Some(reply) = &message.referenced_message {
                     ui.horizontal(|ui| {
                         ui.add_space(49.0);
@@ -1820,6 +1836,9 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                             } else if embed.title.is_some()||embed.description.is_some()||embed.provider.is_some()||embed.author.is_some()||!embed.fields.is_empty() {
                                 ui.push_id(("embed",&message.id,embed.url.as_deref()),|ui|crate::message_media::embed_card(ui,&mut self.images,embed,self.prefs.images));
                             }
+                        }
+                        if !message.components.is_empty() {
+                            ui.push_id(("components",&message.id),|ui|crate::components::show(ui,&mut self.images,&message.components));
                         }
                         if !deleted && !message.reactions.is_empty() {
                             ui.horizontal_wrapped(|ui| {
@@ -2101,6 +2120,20 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             }
         }
     }
+    /// Sends a GIF link as its own message (Discord shows it as the playing GIF), keeping the draft.
+    fn send_gif(&mut self, channel: &Channel, url: String) {
+        let reference = self.reply.as_ref().filter(|m| m.channel_id == channel.id).map(|m| m.id.clone());
+        if self.preview {
+            let id = format!("local-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos());
+            merge_message(&mut self.messages, Message { id, channel_id: channel.id.clone(), author: self.user.clone().unwrap_or_default(), content: url, timestamp: "Now".into(), ..Default::default() });
+            self.reply = None;
+            return;
+        }
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis().to_string();
+        if self.send_command(Command::Send { channel: channel.id.clone(), content: url.clone(), file: None, nonce, reference }) {
+            self.pending = Some((channel.id.clone(), url));
+        }
+    }
     fn dialogs(&mut self, ctx: &egui::Context) {
         self.extra_dialogs(ctx);
         if let Some(id) = self.delete.clone() {
@@ -2225,11 +2258,20 @@ impl eframe::App for Eclipse {
         if self.home!=Home::Chat||self.settings||self.server_settings||self.channel.as_ref().is_none_or(|c|c.id!=self.picker.channel)||self.calls.active()&&!self.calls.chat{self.picker.close();}
         let (picked, command) = self.picker.show(ctx, &mut self.images);
         if let Some((channel, text)) = picked {
-            let draft = self.drafts.entry(channel).or_default();
-            if !draft.is_empty() {
-                draft.push(' ');
+            // A picked GIF is sent straight away as its own message, like Discord. Emoji (and a GIF
+            // picked while another send or an attachment is waiting) go into the message box.
+            let gif = text.starts_with("https://");
+            let target = self.channels.iter().chain(self.dms.iter()).find(|c| c.id == channel).cloned()
+                .filter(|_| gif && self.pending.is_none() && !self.files.contains_key(&channel));
+            if let Some(target) = target {
+                self.send_gif(&target, text);
+            } else {
+                let draft = self.drafts.entry(channel).or_default();
+                if !draft.is_empty() {
+                    draft.push(' ');
+                }
+                draft.push_str(&text);
             }
-            draft.push_str(&text);
         }
         if let Some(command) = command {
             if self.preview {
@@ -2608,6 +2650,19 @@ mod interaction_tests {
         let sent=app.messages.back().unwrap();assert_eq!(sent.content,format!("<@{}> hi",jordan.id));
         assert_eq!(app.readable(sent,&sent.content),"@Joanne hi");
         assert!(app.suggestions(&channel,"ev").iter().any(|s|s.label=="@everyone"));
+    }
+    #[test]fn clicking_a_suggested_member_inserts_the_mention(){
+        let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);let channel=app.channel.clone().unwrap();
+        let mut member=app.server.members.values().next().expect("sample member").clone();member.user.id="4242".into();member.user.username="joanne".into();member.nick=Some("Joanne".into());app.server.members.insert("4242".into(),member);
+        let out=composer_frame(&ctx,&mut app,&channel,vec![]);
+        let point=out.shapes.iter().find_map(|s|match &s.shape{egui::Shape::Text(t)if t.galley.job.text.starts_with("Message #")=>Some(t.visual_bounding_rect().center()),_=>None}).expect("composer hint");
+        for pressed in [true,false]{composer_frame(&ctx,&mut app,&channel,vec![egui::Event::PointerMoved(point),egui::Event::PointerButton{pos:point,button:egui::PointerButton::Primary,pressed,modifiers:Default::default()}]);}
+        composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Text("@jo".into())]);
+        let out=composer_frame(&ctx,&mut app,&channel,vec![]);
+        let row=out.shapes.iter().find_map(|s|match &s.shape{egui::Shape::Text(t)if t.galley.job.text=="Joanne"=>Some(t.visual_bounding_rect().center()),_=>None}).expect("suggestion row");
+        composer_frame(&ctx,&mut app,&channel,vec![egui::Event::PointerMoved(row)]);
+        for pressed in [true,false]{composer_frame(&ctx,&mut app,&channel,vec![egui::Event::PointerButton{pos:row,button:egui::PointerButton::Primary,pressed,modifiers:Default::default()}]);}
+        assert_eq!(app.drafts[&channel.id],"@joanne ","clicking a member fills in the mention");
     }
     #[test]fn composer_enter_sends_shift_enter_inserts_newline_and_unfocused_enter_does_nothing(){
         let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);let channel=app.channel.clone().unwrap();let before=app.messages.len();

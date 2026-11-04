@@ -9,6 +9,7 @@ mod sounds;
 mod folders;
 mod media_picker;
 mod message_media;
+mod components;
 mod model;
 mod identity;
 mod timeline;

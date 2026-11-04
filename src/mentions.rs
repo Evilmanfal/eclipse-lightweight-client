@@ -65,7 +65,11 @@ impl Eclipse {
     /// The @ suggestion list above the message box while an @word is being typed.
     pub(in crate::ui) fn mention_popup(&mut self, ctx: &egui::Context, channel: &Channel, response: &egui::Response, (step, choose): (i32, bool)) {
         self.mention_open = false;
-        if !response.has_focus() { return; }
+        // Pressing a row takes focus from the message box before the click lands, so keep the list
+        // alive while the pointer is over where it was drawn last frame.
+        let popup_rect = egui::Id::new("mention-popup-rect");
+        let over_popup = ctx.data(|d| d.get_temp::<egui::Rect>(popup_rect)).is_some_and(|r| ctx.pointer_latest_pos().is_some_and(|p| r.contains(p)));
+        if !response.has_focus() && !over_popup { ctx.data_mut(|d| d.remove::<egui::Rect>(popup_rect)); return; }
         let draft = self.drafts.get(&channel.id).cloned().unwrap_or_default();
         let cursor = egui::text_edit::TextEditState::load(ctx, response.id).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index).unwrap_or_else(|| draft.chars().count());
         let Some((start, query)) = mention_token(&draft, cursor) else { self.mention_pick = 0; return };
@@ -82,7 +86,7 @@ impl Eclipse {
         let row = 40.0;
         // Anchored by its bottom edge so it always sits just above the message box.
         let at = egui::pos2(response.rect.left() - 8.0, response.rect.top() - 20.0);
-        egui::Area::new(egui::Id::new("mention-popup")).order(egui::Order::Foreground).pivot(egui::Align2::LEFT_BOTTOM).fixed_pos(at).show(ctx, |ui| {
+        let area = egui::Area::new(egui::Id::new("mention-popup")).order(egui::Order::Foreground).pivot(egui::Align2::LEFT_BOTTOM).fixed_pos(at).show(ctx, |ui| {
             egui::Frame::NONE.fill(Color32::from_gray(30)).stroke(Stroke::new(1.0_f32, BORDER)).corner_radius(8).inner_margin(6).show(ui, |ui| {
                 ui.set_width(response.rect.width().max(320.0));
                 ui.label(RichText::new("MEMBERS").size(11.0).strong().color(MUTED));
@@ -105,7 +109,9 @@ impl Eclipse {
                 }
             });
         });
+        ctx.data_mut(|d| d.insert_temp(popup_rect, area.response.rect));
         let Some(item) = picked.and_then(|i| items.get(i).cloned()) else { return };
+        ctx.data_mut(|d| d.remove::<egui::Rect>(popup_rect));
         // Members go in as @username (sent as <@id>); @everyone and @here are sent as typed.
         let inserted = match (&item.user, &item.id) { (Some(user), Some(id)) => { let label = format!("@{}", user.username); self.mention_ids.insert(label.clone(), id.clone()); label }, _ => item.label.clone() };
         let chars: Vec<char> = draft.chars().collect();
