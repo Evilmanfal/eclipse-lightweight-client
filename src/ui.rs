@@ -378,6 +378,7 @@ impl Eclipse {
             "server-zoom"=>{self.prefs.zoom=1.5;self.server_settings=true;},
             "quick-actions"=>{self.preview_gesture=Some("message");if let Some(message)=self.messages.back_mut(){if let Some(user)=&self.user{message.author=user.clone();}}},
             "server-hover"=>self.preview_gesture=Some("server"),
+            "server-menu"=>{self.preview_gesture=Some("server-menu");self.prefs.developer=true;},
             "full-profile"=>{if let Some(mut user)=self.messages.front().map(|m|m.author.clone()){user.display_name_styles=Some(serde_json::json!({"font_id":14,"effect_id":2,"colors":[12034809,4437965]}));self.open_full_profile(&user);let key=crate::ui::panels::profile_key_for(&user.id,self.full_profile_guild.as_deref());self.features.insert(key,serde_json::json!({"user_profile":{"pronouns":"they / them","bio":"Building little things with good people.
 A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member":{"joined_at":"2021-10-13T00:00:00Z"},"connected_accounts":[{"type":"twitch","name":"eclipse","verified":true},{"type":"xbox","name":"Eclipse"}]}));}},
             "account-menu"=>{self.account_anchor=Some(egui::Rect::from_min_size(egui::pos2(4.,814.),Vec2::new(311.,52.)));self.account_just_opened=true;self.account_expanded=Some(0);},
@@ -388,6 +389,8 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             "inline-logs"=>{if let Some(old)=self.messages.get(self.messages.len().saturating_sub(2)).cloned(){self.log_message(old.clone(),false);let index=self.messages.len().saturating_sub(2);if let Some(message)=self.messages.get_mut(index){message.content="The updated message stays right here in the conversation.".into();message.edited_timestamp=Some("edited".into());}}if let Some(deleted)=self.messages.back().cloned(){self.log_message(deleted.clone(),true);self.messages.retain(|m|m.id!=deleted.id);}},
             "voice-sidebar"=>{if let(Some(channel),Some(user))=(self.channels.iter().find(|c|c.kind==2).cloned(),self.user.clone()){self.calls.preview(channel,user,vec![]);self.calls.chat=true;}},
             "voice"|"plugins"|"themes"|"performance"=>{self.settings=true;self.settings_page=match section{"voice"=>"Voice & Video","plugins"=>"Plugins","themes"=>"Themes",_=>"Performance"}.into();},
+            s if s.starts_with("settings:")=>{self.settings=true;self.settings_page=s["settings:".len()..].into();self.load_settings_section();},
+            s if s.starts_with("server:")=>{self.server_settings=true;self.server_page=s["server:".len()..].into();self.load_server_page();},
             "server-settings"=>{self.server_settings=true;self.server_page="Overview".into();},
             "roles"=>{self.server_settings=true;self.server_page="Roles".into();},
             "friends"=>{self.navigate_home(Home::Friends);self.friend_filter="All".into();},
@@ -1366,10 +1369,15 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         let mut job=egui::text::LayoutJob::simple(name.clone(),egui::FontId::proportional(17.),TEXT,text_rect.width());job.wrap.max_rows=1;job.wrap.break_anywhere=true;let galley=ui.fonts(|fonts|fonts.layout_job(job));
                         ui.painter().with_clip_rect(text_rect).galley(egui::pos2(text_rect.left(),response.rect.center().y-galley.size().y/2.),galley,TEXT);
                         ui.painter().text(response.rect.right_center()-Vec2::new(12.,0.),egui::Align2::CENTER_CENTER,"⌄",egui::FontId::proportional(15.),MUTED);
-                        egui::Popup::menu(&response).id(egui::Id::new("server-header-menu")).show(|ui|{ui.set_min_width(225.);ui.strong(&name);ui.separator();
-                            if ui.button("Server Settings").clicked(){self.open_server_settings();ui.close();}
-                            if ui.button("Members & Roles").clicked(){self.open_server_settings();self.server_page="Members".into();self.load_server_page();ui.close();}
-                            if ui.button("Notification Settings").clicked(){self.open_server_settings();self.server_page="Notifications".into();self.load_server_page();ui.close();}
+                        crate::settings_layout::set_accent(ui.ctx(),self.accent());
+                        let menu_width=response.rect.width().max(220.)-12.;if self.preview_gesture==Some("server-menu"){egui::Popup::open_id(ui.ctx(),egui::Id::new("server-header-menu"));}
+                        egui::Popup::menu(&response).id(egui::Id::new("server-header-menu")).gap(6.)
+                            .frame(egui::Frame::NONE.fill(Color32::from_gray(17)).stroke(Stroke::new(1.0_f32,Color32::from_gray(44))).corner_radius(10).inner_margin(6).shadow(egui::Shadow{offset:[0,6],blur:18,spread:0,color:Color32::from_black_alpha(140)}))
+                            .show(|ui|{ui.set_width(menu_width);ui.spacing_mut().item_spacing.y=2.;use crate::settings_layout::{menu_item,menu_separator};
+                            if menu_item(ui,"Server Settings","⚙",false).clicked(){self.open_server_settings();ui.close();}
+                            if menu_item(ui,"Members & Roles","👥",false).clicked(){self.open_server_settings();self.server_page="Members".into();self.load_server_page();ui.close();}
+                            if menu_item(ui,"Notification Settings","🔔",false).clicked(){self.open_server_settings();self.server_page="Notifications".into();self.load_server_page();ui.close();}
+                            if self.prefs.developer{menu_separator(ui);if menu_item(ui,"Copy Server ID","🆔",false).clicked(){ui.ctx().copy_text(guild.id.clone());ui.close();}}
                         });
                     }else{
                         // Conversation search at the top, like Discord. The placeholder clears while focused and
