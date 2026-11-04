@@ -3,11 +3,7 @@ impl Eclipse {
     pub(in crate::ui) fn home_panel(&mut self,ctx:&egui::Context){
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(preferences::color(&self.prefs.theme.background).unwrap_or(BG)).inner_margin(egui::Margin{left:20,right:20,top:if self.updater_later(){56}else{20},bottom:20})).show(ctx,|ui|{
             // Friends lays out its own scrolling list beside the Active Now column.
-            if self.home==Home::Friends{self.friends_content(ui);return;}
-            egui::ScrollArea::vertical().id_salt("home-scroll").auto_shrink([false,false]).show(ui,|ui|{
-                if self.preview{ui.weak("Offline preview · sample friends, no account data or purchases");ui.add_space(10.);}
-                match self.home{Home::Nitro=>self.nitro_content(ui),Home::Shop=>self.shop_content(ui),Home::Quests=>self.quests_content(ui),Home::Friends|Home::Chat=>{}}
-            });
+            self.friends_content(ui);
         });
     }
     fn friends_content(&mut self,ui:&mut egui::Ui){
@@ -105,16 +101,6 @@ impl Eclipse {
                 ui.add_space(10.);
             }
         });
-    }
-    pub(in crate::ui) fn nitro_content(&mut self,ui:&mut egui::Ui){
-        egui::Frame::NONE.fill(Color32::from_rgb(72,48,114)).corner_radius(16).inner_margin(26).show(ui,|ui|{
-            let width=ui.available_width();ui.set_min_width(width);ui.set_min_height(170.);
-            let rect=egui::Rect::from_min_size(ui.cursor().min,Vec2::new(width,170.));crate::identity::gradient(ui,rect.expand(26.),Color32::from_rgb(74,38,129),Color32::from_rgb(167,70,167));
-            let show_art=width>480.;if show_art{let art=egui::Rect::from_center_size(egui::pos2(rect.right()-105.,rect.center().y),Vec2::splat(210.));crate::identity::paint_art(ui,&mut self.images,art,Some("builtin://discord/nitro-wumpus".into()),0);}
-            ui.scope(|ui|{ui.set_max_width(if show_art{width-225.}else{width});ui.label(RichText::new("NITRO").size(38.).strong().color(Color32::WHITE));ui.label(RichText::new("A little more you.").size(22.).color(Color32::WHITE));ui.add_space(12.);ui.label(nitro_name(self.user.as_ref().map(|u|u.premium_type).unwrap_or(0)));ui.hyperlink_to("Explore or manage Discord Nitro","https://discord.com/nitro");});
-        });ui.add_space(20.);
-        for(title,description)in[("Express yourself","Custom and animated emoji, animated avatars and profile customization where your subscription permits."),("Bigger uploads and longer messages","Nitro message length is enabled up to 4,000 characters; account upload limits are enforced by Discord."),("Better streaming","Native 1080p / 60fps options for Nitro or eligible boosted servers. This renderer does not yet support 4K streaming."),("Boost your communities","View your current boost slots in User Settings → Server Boost."),("Shop and rewards","Browse Discord's live collectibles catalog and view the quests offered to your account.")]{egui::Frame::group(ui.style()).corner_radius(10).inner_margin(18).show(ui,|ui|{ui.strong(title);ui.label(description);});ui.add_space(10.);}
-        ui.weak("Discord determines your paid entitlements. This client does not grant Nitro, unlock purchased items or process payments.");
     }
     pub(in crate::ui) fn spotify_card(&mut self,ui:&mut egui::Ui){
         let Some(spotify)=&self.spotify else{return;};let track=spotify.track.clone();

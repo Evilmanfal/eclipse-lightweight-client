@@ -169,6 +169,9 @@ pub struct Message {
     /// Buttons, select menus and Components V2 layouts sent by apps and bots.
     #[serde(default)]
     pub components: Vec<serde_json::Value>,
+    /// True when @everyone or @here in this message notified people.
+    #[serde(default)]
+    pub mention_everyone: bool,
     /// Slash command that produced this message (who used which command).
     #[serde(default)]
     pub interaction_metadata: Option<serde_json::Value>,

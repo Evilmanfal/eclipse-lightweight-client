@@ -23,6 +23,8 @@ pub fn visible_content(message:&Message,images:bool)->String{
 pub enum Span<'a> {
     Text(&'a str),
     Emoji { label: &'a str, url: String },
+    /// A resolved @user, @role, #channel, @everyone or @here, drawn as a highlighted pill.
+    Mention(&'a str),
 }
 pub fn spans(text: &str) -> Vec<Span<'_>> {
     let mut result = Vec::new();
@@ -30,6 +32,15 @@ pub fn spans(text: &str) -> Vec<Span<'_>> {
     let mut plain = 0;
     while offset < text.len() {
         let rest = &text[offset..];
+        if rest.starts_with(MENTION_START) {
+            if let Some(end) = rest.find(MENTION_END) {
+                if plain < offset { result.push(Span::Text(&text[plain..offset])); }
+                result.push(Span::Mention(&rest[MENTION_START.len_utf8()..end]));
+                offset += end + MENTION_END.len_utf8();
+                plain = offset;
+                continue;
+            }
+        }
         let mut matched = None;
         if rest.starts_with("<:") || rest.starts_with("<a:") {
             if let Some(end) = rest.find('>').filter(|i| *i < 100) {
@@ -111,6 +122,29 @@ pub fn apply_mentions(text:&str,ids:&std::collections::HashMap<String,String>)->
     }
     out
 }
+/// Invisible markers around a resolved mention in display text, so `body` can highlight it.
+pub const MENTION_START: char = '\u{E000}';
+pub const MENTION_END: char = '\u{E001}';
+/// Display text without mention markers (reply previews, copying).
+pub fn strip_marks(text:&str)->String{text.chars().filter(|c|*c!=MENTION_START&&*c!=MENTION_END).collect()}
+/// Discord's mention pill: soft accent background, light accent text.
+pub fn mention_colors()->(egui::Color32,egui::Color32){(egui::Color32::from_rgba_unmultiplied(88,101,242,77),egui::Color32::from_rgb(201,205,251))}
+/// Byte ranges of whole-word mentions in a draft: picked @usernames plus @everyone and @here.
+pub fn mention_ranges(text:&str,labels:&[&str])->Vec<std::ops::Range<usize>>{
+    let mut found:Vec<std::ops::Range<usize>>=vec![];
+    let mut labels:Vec<&str>=labels.iter().copied().chain(["@everyone","@here"]).filter(|l|l.len()>1).collect();labels.sort_by_key(|l|std::cmp::Reverse(l.len()));
+    for label in labels{
+        let mut from=0;
+        while let Some(at)=text[from..].find(label).map(|i|i+from){
+            let end=at+label.len();
+            let after=text[end..].chars().next();let before=text[..at].chars().last();
+            let whole=!after.is_some_and(|c|c.is_alphanumeric()||c=='_'||c=='.')&&!before.is_some_and(|c|c.is_alphanumeric());
+            if whole&&!found.iter().any(|r|r.start<end&&at<r.end){found.push(at..end);}
+            from=end;
+        }
+    }
+    found.sort_by_key(|r|r.start);found
+}
 /// The web address inside a word, without surrounding <> or trailing punctuation.
 pub fn link_in(word:&str)->Option<&str>{
     let link=word.trim_start_matches(['<','(']).trim_end_matches(['>',',',';','.','!','?',':',')','\'','"']);
@@ -118,7 +152,7 @@ pub fn link_in(word:&str)->Option<&str>{
 }
 pub fn body(ui: &mut egui::Ui, images: &mut Images, text: &str) ->Vec<egui::Response> {
     let spans = spans(text);
-    if !spans.iter().any(|s| matches!(s, Span::Emoji { .. })) && !text.split_whitespace().any(|w|link_in(w).is_some()) {
+    if !spans.iter().any(|s| matches!(s, Span::Emoji { .. } | Span::Mention(_))) && !text.split_whitespace().any(|w|link_in(w).is_some()) {
         return vec![ui.add(egui::Label::new(text).wrap().selectable(true))];
     }
     let mut responses=vec![];
@@ -169,6 +203,16 @@ pub fn body(ui: &mut egui::Ui, images: &mut Images, text: &str) ->Vec<egui::Resp
                         }
                     }
                     responses.push(response.on_hover_text(label));
+                }
+                Span::Mention(name) => {
+                    let (fill, color) = mention_colors();
+                    let font = egui::TextStyle::Body.resolve(ui.style());
+                    let galley = ui.painter().layout_no_wrap(name.to_owned(), font, color);
+                    let (rect, response) = ui.allocate_exact_size(galley.size() + Vec2::new(4.0, 0.0), egui::Sense::hover());
+                    let fill = if response.hovered() { fill.gamma_multiply(1.6) } else { fill };
+                    ui.painter().rect_filled(rect, 3, fill);
+                    ui.painter().galley(rect.min + Vec2::new(2.0, 0.0), galley, color);
+                    responses.push(response);
                 }
             }
         }

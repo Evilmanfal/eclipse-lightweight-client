@@ -7,7 +7,6 @@ use serde_json::{json,Value};
 #[path="interactions.rs"] mod interactions;
 #[path="profile_popout.rs"] mod profile_popout;
 #[path="dm_picker.rs"] mod dm_picker;
-#[path="store.rs"] mod store;
 #[path="user_panel.rs"] mod user_panel;
 #[path="pins.rs"] mod pins;
 #[path="full_profile.rs"] mod full_profile;
@@ -47,7 +46,6 @@ impl Eclipse {
             "save-notifications"=>{let key=format!("server:{}:Notifications",self.server.id);self.features.insert(key,data);return;},
             "server-write"=>{self.load_server_page();return;},
             "save-channel"|"create-channel"=>{if let Some(g)=self.guild.clone(){self.send_command(Command::Channels(g));}return;},
-            "quest-enroll"=>{self.request_feature("quests","/quests/@me".into());return;},
             _=>{}
         }
         if let Some(guild)=key.strip_prefix("guild:"){if guild==self.server.id{self.server.metadata=data.clone();self.server_edit=data.clone();if let Some(roles)=data.get("roles"){if let Ok(roles)=serde_json::from_value(roles.clone()){self.server.roles=roles;}}}return;}
@@ -55,7 +53,7 @@ impl Eclipse {
         if let Some(guild)=key.strip_prefix("me-member:"){if guild==self.server.id{if let Ok(member)=serde_json::from_value(data){self.server.insert(member);}}return;}
         if let Some(guild)=key.strip_prefix("members:"){if guild==self.server.id{if let Ok(members)=serde_json::from_value::<Vec<Member>>(data){self.server.has_more=members.len()==100;self.server.cursor=members.last().map(|m|m.user.id.clone());for member in members{self.server.insert(member);}}}return;}
         if key.starts_with("profile:") { let full=self.full_profile.as_ref().is_some_and(|u|profile_key_for(&u.id,self.full_profile_guild.as_deref())==key); let popout=self.profile.as_ref().is_some_and(|u|self.profile_key(&u.id)==key); if !popout&&!full{return;} if full{if let Some(user)=self.full_profile.clone(){self.full_profile=Some(crate::identity::merged(&user,&data));}} if let Some(user)=self.profile.clone().filter(|_|popout){self.profile=Some(crate::identity::merged(&user,&data));self.profile_patch("USER_UPDATE",&data["user"]);if self.profile_guild.as_deref()==Some(&self.server.id){if let Some(member)=self.server.members.get_mut(&user.id){if data["guild_member"].get("avatar_decoration_data").is_some(){member.avatar_decoration_data=data["guild_member"]["avatar_decoration_data"].as_object().map(|_|data["guild_member"]["avatar_decoration_data"].clone());}}}} }
-        if self.features.len()>40{self.features.retain(|key,_|matches!(key.as_str(),"settings"|"my-profile"|"shop"|"quests"));}
+        if self.features.len()>40{self.features.retain(|key,_|matches!(key.as_str(),"settings"|"my-profile"));}
         self.features.insert(key,data);
     }
     /// Keeps every server's custom emojis (from READY, GUILD_CREATE and GUILD_EMOJIS_UPDATE).
@@ -107,7 +105,6 @@ impl Eclipse {
             "RELATIONSHIP_REMOVE"=>self.friends.retain(|r|Some(r.id.as_str())!=data["id"].as_str()),
             "USER_SETTINGS_UPDATE"=>{if let Some(v)=data["show_current_game"].as_bool(){self.game_activity=v;}if let Some(status)=data["status"].as_str(){if let Some(user)=&self.user{self.presences.set(user.id.clone(),String::new(),crate::presence::Status::parse(status));}}},
             "MESSAGE_ACK"=>{if let Some(channel)=data["channel_id"].as_str(){self.unread.remove(channel);}},
-            "QUESTS_USER_STATUS_UPDATE"=>{if self.home==Home::Quests{self.request_feature("quests","/quests/@me".into());}},
             _=>{}
         }
     }
@@ -120,7 +117,7 @@ impl Eclipse {
     }
     pub(super) fn open_settings(&mut self){self.settings=true;if !self.features.contains_key("settings"){self.request_feature("settings","/users/@me/settings".into());}if !self.features.contains_key("my-profile"){self.load_my_profile();}}
     pub(super) fn open_server_settings(&mut self){self.server_settings=true;self.server_page="Overview".into();if let Some(g)=self.guild.clone(){self.load_server(&g);}}
-    pub(super) fn navigate_home(&mut self,home:Home){self.remember_conversation();self.home=home;self.profile=None;self.guild=None;self.channels=self.dms.clone();self.channel=None;self.messages.clear();self.search.clear();match home{Home::Friends=>self.request_feature("friends","/users/@me/relationships".into()),Home::Shop=>self.request_feature("shop","/collectibles-shop?include_bundles=true".into()),Home::Quests=>self.request_feature("quests","/quests/@me".into()),Home::Nitro=>self.load_my_profile(),_=>{}}}
+    pub(super) fn navigate_home(&mut self,home:Home){self.remember_conversation();self.home=home;self.profile=None;self.guild=None;self.channels=self.dms.clone();self.channel=None;self.messages.clear();self.search.clear();match home{Home::Friends=>self.request_feature("friends","/users/@me/relationships".into()),_=>{}}}
     pub(super) fn demo_community(&mut self){
         let id=self.guild.clone().unwrap_or_else(||"local-lab".into());self.server=community::Server{id:id.clone(),metadata:json!({"id":id,"name":"Eclipse Lab","owner_id":"local-me","description":"A little more room to breathe.","verification_level":1,"default_message_notifications":1,"explicit_content_filter":2,"afk_timeout":300,"preferred_locale":"en-US","approximate_member_count":8,"premium_tier":2,"premium_subscription_count":7}),..Default::default()};
         self.server.roles=vec![Role{id:id.clone(),name:"@everyone".into(),permissions:"1024".into(),..Default::default()},Role{id:"sample-admin".into(),name:"Community team".into(),color:0x41b7cd,position:2,hoist:true,permissions:"8".into(),..Default::default()},Role{id:"sample-member".into(),name:"Members".into(),color:0xd9b4ed,position:1,hoist:true,..Default::default()}];
@@ -214,9 +211,6 @@ impl Eclipse {
             "Devices"=>self.request_feature("devices","/auth/sessions".into()),
             "Authorized Apps"=>self.request_feature("authorized-apps","/oauth2/tokens".into()),
             "Voice & Video"=>{self.audio_devices=discord_voice::audio::devices().ok();},
-            "Gift Inventory"=>self.request_feature("inventory","/users/@me/entitlements/gifts".into()),
-            "Server Boost"=>self.request_feature("boosts","/users/@me/guilds/premium/subscription-slots".into()),
-            "Subscriptions"=>self.request_feature("subscriptions","/users/@me/billing/subscriptions".into()),
             _=>{}
         }
     }
@@ -341,9 +335,7 @@ impl Eclipse {
                 ui.add_space(14.);if sl::primary(ui,"Save account settings",!self.feature_pending.contains("save-settings")).clicked(){let base=self.features.get("settings").cloned().unwrap_or(Value::Null);let changes=delta(&base,&self.settings_edit);self.mutate("save-settings",Method::PATCH,"/users/@me/settings".into(),Some(changes));}self.feature_status(ui,"save-settings");
                 }else if ui.button("Load account settings").clicked(){self.request_feature("settings","/users/@me/settings".into());}
             }
-            "Connections"|"Devices"|"Authorized Apps"|"Gift Inventory"|"Server Boost"|"Subscriptions"=>self.account_page(ui,&page),
-            "Nitro"=>self.nitro_content(ui),
-            "Billing"=>{sl::section(ui,"Payment Methods");sl::help(ui,"Manage payment methods and receipts through Discord's secure checkout. Eclipse never collects card details or purchases automatically.");link(ui,"Open Discord billing","https://discord.com/channels/@me");},
+            "Connections"|"Devices"|"Authorized Apps"=>self.account_page(ui,&page),
             "Family Center"=>{sl::section(ui,"Family Center");sl::help(ui,"Family links, supervision and age verification must be completed in Discord.");link(ui,"Open Family Center help","https://support.discord.com/hc/en-us/categories/15878301948823-Family-Center");},
             "Keybinds"=>{
                 sl::section(ui,"Messages");ui.add_space(4.);

@@ -24,7 +24,7 @@ const LOG_RED: Color32 = Color32::from_rgb(242, 124, 133);
 const BORDER: Color32 = Color32::from_gray(46);
 const DM_PAGE_SIZE: usize = 25;
 #[path="panels.rs"] mod panels;
-#[derive(Clone,Copy,PartialEq)] enum Home { Chat, Friends, Nitro, Shop, Quests }
+#[derive(Clone,Copy,PartialEq)] enum Home { Chat, Friends }
 use crate::timeline::Logged;
 
 pub struct Eclipse {
@@ -135,8 +135,6 @@ pub struct Eclipse {
     profile_guild: Option<String>,
     profile_just_opened: bool,
     voice_revealed: Option<String>,
-    shop_filter: String,
-    quest_filter: String,
     spotify:Option<crate::spotify::Spotify>,
     game_activity:bool,
     read_latest:HashMap<String,String>,
@@ -272,7 +270,7 @@ impl Eclipse {
             picker: Default::default(),
             calls: crate::calls::Calls::new(ctx.clone()),
             applied_prefs:prefs.clone(),prefs,prefs_save_at:None,home:Home::Chat,
-            settings_page:"Account & Profile".into(),settings_search:String::new(),server_settings:false,server_page:"Overview".into(),server:Default::default(),features:HashMap::new(),feature_errors:HashMap::new(),feature_pending:HashSet::new(),account_edit:serde_json::Value::Null,settings_edit:serde_json::Value::Null,server_edit:serde_json::Value::Null,role_edit:None,profile:None,friends:vec![],friend_filter:"Online".into(),friend_search:String::new(),friend_add:String::new(),member_search:String::new(),reply:None,logs:VecDeque::new(),profile_anchor:None,profile_guild:None,profile_just_opened:false,voice_revealed:None,shop_filter:"All".into(),quest_filter:"Discover".into(),spotify:None,game_activity:true,read_latest:HashMap::new(),confirm:None,hotkey_record:None,audio_devices:None,last_typing:None,composer_ime:false,mention_open:false,mention_pick:0,mention_ids:HashMap::new(),mention_query:String::new(),server_emojis:HashMap::new(),stream_preview_fetched:HashMap::new(),prefetched:HashMap::new(),dms_prefetched:false,focus_message_box:false,updater:Default::default(),
+            settings_page:"Account & Profile".into(),settings_search:String::new(),server_settings:false,server_page:"Overview".into(),server:Default::default(),features:HashMap::new(),feature_errors:HashMap::new(),feature_pending:HashSet::new(),account_edit:serde_json::Value::Null,settings_edit:serde_json::Value::Null,server_edit:serde_json::Value::Null,role_edit:None,profile:None,friends:vec![],friend_filter:"Online".into(),friend_search:String::new(),friend_add:String::new(),member_search:String::new(),reply:None,logs:VecDeque::new(),profile_anchor:None,profile_guild:None,profile_just_opened:false,voice_revealed:None,spotify:None,game_activity:true,read_latest:HashMap::new(),confirm:None,hotkey_record:None,audio_devices:None,last_typing:None,composer_ime:false,mention_open:false,mention_pick:0,mention_ids:HashMap::new(),mention_query:String::new(),server_emojis:HashMap::new(),stream_preview_fetched:HashMap::new(),prefetched:HashMap::new(),dms_prefetched:false,focus_message_box:false,updater:Default::default(),
         };
         app.calls.configure(&app.prefs);
         app.images.playback_options(app.prefs.animations&&!app.prefs.reduced_motion,app.prefs.animation_fps);
@@ -378,6 +376,11 @@ impl Eclipse {
             "server-zoom"=>{self.prefs.zoom=1.5;self.server_settings=true;},
             "quick-actions"=>{self.preview_gesture=Some("message");if let Some(message)=self.messages.back_mut(){if let Some(user)=&self.user{message.author=user.clone();}}},
             "server-hover"=>self.preview_gesture=Some("server"),
+            "mention-highlight"=>{if let (Some(channel),Some(mut member))=(self.channel.clone(),self.server.members.values().find(|m|m.name()=="Jordan").cloned()){
+                member.user.id="4242".into();self.server.members.insert("4242".into(),member.clone());
+                let label=format!("@{}",member.user.username);self.mention_ids.insert(label.clone(),member.user.id.clone());
+                self.drafts.insert(channel.id.clone(),format!("hey {label} and @everyone, check this out"));self.focus_message_box=true;
+                if let Some(last)=self.messages.back().cloned(){let mut message=Message{id:"mention-highlight".into(),content:format!("<@{}> can you look at this? @everyone",member.user.id),mention_everyone:true,..last};message.referenced_message=None;message.reactions.clear();message.embeds.clear();message.attachments.clear();self.messages.push_back(message);}}},
             "app-message"=>{if let Some(last)=self.messages.back().cloned(){let mut bot=last.author.clone();bot.id="keto".into();bot.username="keto".into();bot.global_name=Some("Keto".into());let mut message=Message{id:"app-message".into(),author:bot,content:String::new(),edited_timestamp:Some("2026-11-03T14:02:00Z".into()),..last};message.referenced_message=None;message.reactions.clear();message.attachments.clear();message.embeds.clear();
                 message.interaction_metadata=Some(serde_json::json!({"name":"config","user":{"id":"3","username":"husain"}}));
                 message.components=serde_json::from_value(serde_json::json!([{"type":17,"components":[{"type":10,"content":"# 🔗 Autofix Configuration\nConfigure which social platforms have link fixing enabled."},{"type":14,"divider":true,"spacing":1},{"type":1,"components":[{"type":3,"custom_id":"a","placeholder":"Autofix","options":[{"label":"Autofix","value":"a","default":true,"emoji":{"name":"🔗"}}]}]},{"type":1,"components":[{"type":3,"custom_id":"b","options":[{"label":"X","value":"x","default":true,"emoji":{"name":"🟢"}}]}]},{"type":1,"components":[{"type":2,"style":4,"label":"Disable X","custom_id":"c"}]}]}])).unwrap_or_default();
@@ -398,7 +401,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             "server-settings"=>{self.server_settings=true;self.server_page="Overview".into();},
             "roles"=>{self.server_settings=true;self.server_page="Roles".into();},
             "friends"=>{self.navigate_home(Home::Friends);self.friend_filter="All".into();},
-            "nitro"=>self.navigate_home(Home::Nitro),"shop"=>self.navigate_home(Home::Shop),"quests"=>self.navigate_home(Home::Quests),
+
             "call-live"|"call-watching"|"stream-pip"|"stream-expanded"|"share-picker"=>{if let(Some(channel),Some(user))=(self.channel.clone(),self.user.clone()){let mut seen=HashSet::new();let peers=self.messages.iter().map(|m|m.author.clone()).filter(|u|u.id!=user.id&&seen.insert(u.id.clone())).take(3).collect();self.calls.preview(channel,user,peers);if section!="share-picker"{self.calls.preview_live(section!="call-live");self.calls.chat=section=="stream-pip";self.calls.expanded=section=="stream-expanded";}else{self.calls.preview_picker();}}},
             "call"=>{if let(Some(channel),Some(user))=(self.channel.clone(),self.user.clone()){let mut seen=HashSet::new();let peers=self.messages.iter().map(|m|m.author.clone()).filter(|u|u.id!=user.id&&seen.insert(u.id.clone())).take(3).collect();self.calls.preview(channel,user,peers);}},
             _=>{}
@@ -1405,7 +1408,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     ui.add_space(if self.guild.is_some(){4.0}else{0.0});
                     if self.guild.is_none(){
                         ui.scope(|ui|{ui.spacing_mut().item_spacing.y=1.0;
-                            for(home,label)in[(Home::Friends,"Friends"),(Home::Nitro,"Nitro"),(Home::Shop,"Shop"),(Home::Quests,"Quests")]{if crate::widgets::home_row(ui,label,self.home==home,if self.home==home{TEXT}else{MUTED}).clicked(){self.navigate_home(home);}}
+                            for(home,label)in[(Home::Friends,"Friends")]{if crate::widgets::home_row(ui,label,self.home==home,if self.home==home{TEXT}else{MUTED}).clicked(){self.navigate_home(home);}}
                         });
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
@@ -1737,7 +1740,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         );
                         ui.add(
                             egui::Label::new(
-                                RichText::new(self.readable(reply,&crate::message_media::visible_content(reply,self.prefs.images)).chars().take(90).collect::<String>())
+                                RichText::new(crate::message_media::strip_marks(&self.readable(reply,&crate::message_media::visible_content(reply,self.prefs.images))).chars().take(90).collect::<String>())
                                     .size(12.0)
                                     .color(MUTED),
                             )
@@ -2006,8 +2009,29 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         else if let Some(path)=rfd::FileDialog::new().pick_file(){self.files.insert(channel.id.clone(),path);}
                     }
                     let mention_keys = self.mention_keys(ctx);
+                    // Picked @names (and @everyone / @here) show as highlighted pills while typing.
+                    let labels: Vec<String> = self.mention_ids.keys().cloned().collect();
+                    let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap: f32| {
+                        let text = text.as_str();
+                        let font = egui::TextStyle::Body.resolve(ui.style());
+                        let color = ui.visuals().text_color();
+                        let (fill, mention) = crate::message_media::mention_colors();
+                        let plain = egui::TextFormat::simple(font.clone(), color);
+                        let pill = egui::TextFormat { background: fill, color: mention, ..egui::TextFormat::simple(font, mention) };
+                        let mut job = egui::text::LayoutJob::default();
+                        let mut last = 0;
+                        for range in crate::message_media::mention_ranges(text, &labels.iter().map(String::as_str).collect::<Vec<_>>()) {
+                            job.append(&text[last..range.start], 0.0, plain.clone());
+                            job.append(&text[range.clone()], 0.0, pill.clone());
+                            last = range.end;
+                        }
+                        job.append(&text[last..], 0.0, plain);
+                        job.wrap.max_width = wrap;
+                        ui.fonts(|f| f.layout_job(job))
+                    };
                     let draft = self.drafts.entry(channel.id.clone()).or_default();
                     let edit = egui::TextEdit::multiline(draft)
+                        .layouter(&mut layouter)
                         .id_salt(("composer",&channel.id))
                         .return_key(egui::KeyboardShortcut::new(egui::Modifiers::SHIFT,egui::Key::Enter))
                         .hint_text(format!("Message #{}", channel.label()))
@@ -2648,7 +2672,7 @@ mod interaction_tests {
         composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Key{key:egui::Key::Enter,physical_key:None,pressed:false,repeat:false,modifiers:Default::default()}]);
         composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Text("hi".into()),enter]);
         let sent=app.messages.back().unwrap();assert_eq!(sent.content,format!("<@{}> hi",jordan.id));
-        assert_eq!(app.readable(sent,&sent.content),"@Joanne hi");
+        assert_eq!(crate::message_media::strip_marks(&app.readable(sent,&sent.content)),"@Joanne hi");
         assert!(app.suggestions(&channel,"ev").iter().any(|s|s.label=="@everyone"));
     }
     #[test]fn clicking_a_suggested_member_inserts_the_mention(){
