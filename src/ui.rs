@@ -1805,12 +1805,17 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         for attachment in &message.attachments {
                             let inline=self.prefs.images&&assets::public_url(&attachment.url);
                             if inline {
+                                // Fetched from Discord's proxy at the size it's shown, when Discord says how big it is.
+                                let shown = attachment.proxy_url.as_deref().filter(|u| assets::public_url(u))
+                                    .map(|u| crate::message_media::proxy_sized(u, attachment.width, attachment.height, ui.ctx().pixels_per_point()))
+                                    .filter(|u| u.contains("width="))
+                                    .unwrap_or_else(|| attachment.url.clone());
                                 crate::message_media::picture(
                                     ui,
                                     &mut self.images,
-                                    &attachment.url,
-                                    None,
-                                    None,
+                                    &shown,
+                                    attachment.width,
+                                    attachment.height,
                                     true,
                                 );
                             }
@@ -1836,7 +1841,14 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         for embed in &message.embeds {
                             if self.prefs.images&&crate::message_media::media_embed(embed) {
                                 let animated=embed.video.as_ref().filter(|v|embed.kind=="gifv"||v.url.as_ref().is_some_and(|u|u.contains(".gif")));
-                                if let Some(image)=animated.or(embed.image.as_ref()).or(embed.thumbnail.as_ref()) {if let Some(url)=image.url.as_deref().filter(|u|assets::public_url(u)).or(image.proxy_url.as_deref()){crate::message_media::picture(ui,&mut self.images,url,image.width,image.height,true);}}
+                                if let Some(image)=animated.or(embed.image.as_ref()).or(embed.thumbnail.as_ref()) {
+                                    let ppp=ui.ctx().pixels_per_point();
+                                    // Discord's proxy copy can be fetched at the size it's shown; a video can't, so it keeps its own address.
+                                    let resized=image.proxy_url.as_deref().filter(|u|assets::public_url(u)).map(|u|crate::message_media::proxy_sized(u,image.width,image.height,ppp)).filter(|u|u.contains("width="));
+                                    // A GIF sent as video shows Discord's still preview while the clip loads.
+                                    let poster=animated.and(embed.thumbnail.as_ref()).and_then(|t|t.proxy_url.as_deref().or(t.url.as_deref()).map(|u|crate::message_media::proxy_sized(u,t.width,t.height,ppp)));
+                                    if let Some(url)=resized.or_else(||image.url.as_deref().filter(|u|assets::public_url(u)).or(image.proxy_url.as_deref()).map(str::to_owned)){crate::message_media::picture_with_poster(ui,&mut self.images,&url,image.width,image.height,true,poster.as_deref());}
+                                }
                             } else if embed.title.is_some()||embed.description.is_some()||embed.provider.is_some()||embed.author.is_some()||!embed.fields.is_empty() {
                                 ui.push_id(("embed",&message.id,embed.url.as_deref()),|ui|crate::message_media::embed_card(ui,&mut self.images,embed,self.prefs.images));
                             }

@@ -168,6 +168,15 @@ impl Decoded {
         0
     }
 }
+thread_local! {
+    /// Set by a download worker for its current job: receives an animation's first frame as
+    /// soon as it is decoded, so it can be shown while the remaining frames decode.
+    static FIRST_FRAME: std::cell::RefCell<Option<Box<dyn FnMut(&ColorImage)>>> = const { std::cell::RefCell::new(None) };
+}
+/// Hands an animation's first frame to the waiting worker, once per job.
+fn first_frame_ready(image: &ColorImage) {
+    FIRST_FRAME.with(|slot| if let Some(mut send) = slot.borrow_mut().take() { send(image) });
+}
 fn decode_gif(bytes: &[u8], size: u32) -> Result<Decoded, ()> {
     let mut decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).map_err(|_| ())?;
     let mut limits = image::Limits::default();
@@ -214,6 +223,7 @@ fn decode_frames(
                 ),
                 delay,
             });
+            if frames.len() == 1 { first_frame_ready(&frames[0].image); }
         } else if let Some(last) = frames.last_mut() {
             last.delay += delay;
         }
@@ -479,6 +489,13 @@ impl Images {
                         Err(_) => break,
                     };
                     let (source,_)=source_key(&job.key);
+                    // An animation's first frame goes on screen as soon as it decodes; the full
+                    // animation replaces it when every frame is ready.
+                    let (early, early_key, early_ctx, generation) = (results.clone(), job.key.clone(), ctx.clone(), job.generation);
+                    FIRST_FRAME.with(|slot| *slot.borrow_mut() = Some(Box::new(move |image: &ColorImage| {
+                        let still = Ready { generation, key: early_key.clone(), image: Ok(Decoded::still(image.clone())) };
+                        if early.try_send(still).is_ok() { early_ctx.request_repaint(); }
+                    })));
                     let image = if let Some(key) = source.strip_prefix("demo://") {
                         Ok(demo_asset(key))
                     } else {
@@ -487,6 +504,7 @@ impl Images {
                             .ok_or(())
                             .and_then(|c| download(c, &job.key))
                     };
+                    FIRST_FRAME.with(|slot| slot.borrow_mut().take());
                     let mut ready = Ready {
                         generation: job.generation,
                         key: job.key,
@@ -751,7 +769,7 @@ fn decode_video(bytes:&[u8],size:u32)->Result<Decoded,()>{
     for index in 0..1800{let Some(voice_platform::video::Sample::Video{pts,width,height,rgba})=decoder.read_video().map_err(|_|())?else{break;};
         if !pts.is_finite(){return Err(());}if index>0{if let Some(last)=frames.last_mut(){last.delay+=Duration::from_secs_f64((pts-last_pts).clamp(0.001,1.));}}last_pts=pts;
         if index%stride==0{if frames.len()>=FRAME_LIMIT{let mut old=std::mem::take(&mut frames).into_iter();while let Some(mut frame)=old.next(){if let Some(next)=old.next(){frame.delay+=next.delay;}frames.push(frame);}stride*=2;sampled=true;}
-            let source=image::RgbaImage::from_raw(width,height,rgba).ok_or(())?;let small=image::DynamicImage::ImageRgba8(source).thumbnail(edge.min(width),edge.min(height)).to_rgba8();frames.push(Frame{image:ColorImage::from_rgba_unmultiplied([small.width()as usize,small.height()as usize],small.as_raw()),delay:Duration::ZERO});}
+            let source=image::RgbaImage::from_raw(width,height,rgba).ok_or(())?;let small=image::DynamicImage::ImageRgba8(source).thumbnail(edge.min(width),edge.min(height)).to_rgba8();frames.push(Frame{image:ColorImage::from_rgba_unmultiplied([small.width()as usize,small.height()as usize],small.as_raw()),delay:Duration::ZERO});if frames.len()==1{first_frame_ready(&frames[0].image);}}
         while frames.iter().map(|f|f.image.pixels.len()*4).sum::<usize>()>ASSET_BUDGET{edge=(edge*3/4).max(16);shrink_frames(&mut frames,edge);}
     }if let Some(last)=frames.last_mut(){last.delay+=Duration::from_millis(33);}Decoded::new(frames,sampled)
 }
@@ -853,6 +871,13 @@ mod tests {
         for i in 1..=30{assert!(playback.advance(start+Duration::from_millis(i*17),&data,FRAME_INTERVAL).is_some());}
         assert_eq!(playback.uploads,30);
         let mut cache=Images::new(&egui::Context::default());cache.playback_options(true,60);assert!(cache.frame_interval<Duration::from_millis(17));
+    }
+    #[test]fn an_animation_reports_its_first_frame_before_the_rest_decode(){
+        let seen=std::rc::Rc::new(std::cell::Cell::new(0usize));let counter=seen.clone();
+        FIRST_FRAME.with(|slot|*slot.borrow_mut()=Some(Box::new(move |image:&ColorImage|{assert_eq!(image.size,[64,16]);counter.set(counter.get()+1);})));
+        let frames=(0..10).map(|_|Ok(image::Frame::from_parts(image::RgbaImage::from_pixel(64,16,image::Rgba([1,2,3,255])),0,0,image::Delay::from_numer_denom_ms(50,1))));
+        assert_eq!(decode_frames(frames,512).unwrap().frames.len(),10);
+        assert_eq!(seen.get(),1,"the first frame is handed over once, not per frame");
     }
     #[test]fn display_sizing_keeps_large_art_sharp_and_animation_resolution_bounded(){
         assert_eq!(resolution(egui::vec2(40.,40.),2.),128);assert_eq!(resolution(egui::vec2(360.,150.),2.),1024);

@@ -48,6 +48,15 @@ impl Gif {
             .or(self.preview.as_deref())
             .unwrap_or("")
     }
+    /// What a picker tile animates: the small MP4 Discord's GIF search returns, rather than the
+    /// full GIF file (often several megabytes each).
+    pub fn tile(&self) -> &str {
+        self.src.as_deref().filter(|url| crate::assets::public_url(url)).unwrap_or_else(|| self.image())
+    }
+    /// A still drawn on the tile until its animation has loaded.
+    pub fn poster(&self) -> Option<&str> {
+        self.preview.as_deref().filter(|url| crate::assets::public_url(url))
+    }
     pub fn share(&self) -> &str {
         [self.gif_src.as_deref(),self.src.as_deref(),self.preview.as_deref()].into_iter().flatten()
             .find(|url| crate::assets::public_url(url))
@@ -341,7 +350,7 @@ impl Picker {
                             egui::Grid::new("gif-categories").spacing(Vec2::splat(8.0)).show(ui, |ui| {
                                 for (index, (label, preview)) in self.categories.iter().enumerate() {
                                     let shown = if label == TRENDING { "Trending GIFs" } else { label.as_str() };
-                                    if gif_tile(ui, images, Some(preview), Some(shown), size).clicked() { chosen = Some(label.clone()); }
+                                    if gif_tile(ui, images, Some(preview), None, Some(shown), size).clicked() { chosen = Some(label.clone()); }
                                     if index % 2 == 1 { ui.end_row(); }
                                 }
                             });
@@ -357,7 +366,7 @@ impl Picker {
                         if !browsing {
                             egui::Grid::new("gif-results").spacing(Vec2::splat(8.0)).show(ui, |ui| {
                                 for (index, gif) in self.gifs.iter().take(40).enumerate() {
-                                    if gif_tile(ui, images, Some(gif.image()), None, size).on_hover_text(&gif.title).clicked()
+                                    if gif_tile(ui, images, Some(gif.tile()), gif.poster(), None, size).on_hover_text(&gif.title).clicked()
                                         && crate::model::safe_link(gif.share())
                                     {
                                         picked = Some(gif.share().to_owned());
@@ -395,15 +404,16 @@ pub fn categories(home: &serde_json::Value) -> Vec<(String, String)> {
 }
 /// A GIF tile filling its cell: the picture cropped to fit, with a darkened, bold label for
 /// category tiles.
-fn gif_tile(ui: &mut egui::Ui, images: &mut Images, url: Option<&str>, label: Option<&str>, size: Vec2) -> egui::Response {
+/// `poster` is a still drawn until `url` (the animation) has loaded.
+fn gif_tile(ui: &mut egui::Ui, images: &mut Images, url: Option<&str>, poster: Option<&str>, label: Option<&str>, size: Vec2) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     if !ui.is_rect_visible(rect) { return response; }
     ui.painter().rect_filled(rect, 8, egui::Color32::from_gray(40));
-    if let Some(url) = url.filter(|u| crate::assets::public_url(u)) {
-        if let Some(texture) = images.texture_sized(url, rect.size(), ui.ctx()) {
-            let image = images.dimensions(url, rect.size(), ui.ctx()).unwrap_or(rect.size());
-            egui::Image::new((texture, rect.size())).uv(crate::identity::cover_uv(image, rect.size())).corner_radius(8).paint_at(ui, rect);
-        }
+    let animation = url.filter(|u| crate::assets::public_url(u)).and_then(|u| images.texture_sized(u, rect.size(), ui.ctx()).map(|t| (u, t)));
+    let shown = animation.or_else(|| poster.filter(|u| crate::assets::public_url(u)).and_then(|u| images.texture_sized(u, rect.size(), ui.ctx()).map(|t| (u, t))));
+    if let Some((source, texture)) = shown {
+        let image = images.dimensions(source, rect.size(), ui.ctx()).unwrap_or(rect.size());
+        egui::Image::new((texture, rect.size())).uv(crate::identity::cover_uv(image, rect.size())).corner_radius(8).paint_at(ui, rect);
     }
     if let Some(label) = label {
         ui.painter().rect_filled(rect, 8, egui::Color32::from_black_alpha(if response.hovered() { 90 } else { 140 }));

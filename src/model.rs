@@ -88,6 +88,13 @@ pub struct Attachment {
     pub url: String,
     #[serde(default)]
     pub size: u64,
+    /// Discord's media-proxy copy, which can be fetched resized.
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
 }
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Emoji {

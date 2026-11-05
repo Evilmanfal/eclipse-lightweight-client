@@ -219,13 +219,18 @@ pub fn body(ui: &mut egui::Ui, images: &mut Images, text: &str) ->Vec<egui::Resp
     });
     responses
 }
-pub fn picture(
+pub fn picture(ui: &mut egui::Ui, images: &mut Images, url: &str, width: Option<u32>, height: Option<u32>, gif: bool) {
+    picture_with_poster(ui, images, url, width, height, gif, None);
+}
+/// Like `picture`, with a still `poster` (a GIF's preview image) drawn until the picture loads.
+pub fn picture_with_poster(
     ui: &mut egui::Ui,
     images: &mut Images,
     url: &str,
     width: Option<u32>,
     height: Option<u32>,
     gif: bool,
+    poster: Option<&str>,
 ) {
     if !crate::assets::public_url(url) {
         return;
@@ -249,6 +254,12 @@ pub fn picture(
                 .uv(crate::identity::cover_uv(images.dimensions(url,rect.size(),ui.ctx()).unwrap_or(rect.size()),rect.size()))
                 .corner_radius(19)
                 .paint_at(ui, rect);
+        } else if let Some(still) = poster.filter(|p| !images.failed(url) && crate::assets::public_url(p)).and_then(|p| images.texture_sized(p, rect.size(), ui.ctx()).map(|t| (p, t))) {
+            // The preview image shows at once; the animation replaces it when it has loaded.
+            egui::Image::new((still.1, rect.size()))
+                .uv(crate::identity::cover_uv(images.dimensions(still.0,rect.size(),ui.ctx()).unwrap_or(rect.size()),rect.size()))
+                .corner_radius(19)
+                .paint_at(ui, rect);
         } else {
             ui.painter().text(
                 rect.center(),
@@ -259,9 +270,32 @@ pub fn picture(
             );
         }
     }
+    let url = full_size(url);
     if response.clicked(){open_viewer(ui.ctx(),url);}
     let response=response.on_hover_cursor(egui::CursorIcon::PointingHand);
     response.context_menu(|ui|{if ui.button("Open image").clicked(){ui.ctx().open_url(egui::OpenUrl::new_tab(url));ui.close();}if ui.button("Copy image link").clicked(){ui.ctx().copy_text(url.to_owned());ui.close();}if ui.button("Save image…").clicked(){save_image(ui.ctx(),url);ui.close();}});
+}
+/// Largest edge a chat picture is drawn at, in points.
+pub const PICTURE_EDGE: f32 = 360.0;
+/// Discord's media proxy resizes on request. Asking for the size a picture is drawn at makes
+/// the download, decode and memory far smaller (an animated GIF most of all). Other hosts, and
+/// videos, which the proxy doesn't resize, are left unchanged.
+pub fn proxy_sized(url: &str, width: Option<u32>, height: Option<u32>, pixels_per_point: f32) -> String {
+    let proxy = url.starts_with("https://media.discordapp.net/") || (url.starts_with("https://images-ext-") && url.contains(".discordapp.net/"));
+    let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
+    let (Some(w), Some(h)) = (width.filter(|w| *w > 0), height.filter(|h| *h > 0)) else { return url.to_owned() };
+    if !proxy || [".mp4", ".webm", ".mov", ".m4v"].iter().any(|ext| path.ends_with(ext)) { return url.to_owned(); }
+    let scale = (PICTURE_EDGE * pixels_per_point.max(1.0) / w.max(h) as f32).min(1.0);
+    if scale >= 1.0 { return url.to_owned(); }
+    let (w, h) = (((w as f32 * scale).round() as u32).max(1), ((h as f32 * scale).round() as u32).max(1));
+    format!("{url}{}width={w}&height={h}", if url.contains('?') { '&' } else { '?' })
+}
+/// The full-size address behind a `proxy_sized` one, for opening, saving and copying.
+pub fn full_size(url: &str) -> &str {
+    let Some(at) = url.rfind("width=").filter(|at| *at > 0 && matches!(url.as_bytes()[at - 1], b'?' | b'&')) else { return url };
+    let tail = &url[at..];
+    let sized = tail.strip_prefix("width=").and_then(|t| t.split_once("&height=")).is_some_and(|(w, h)| !w.is_empty() && !h.is_empty() && w.bytes().chain(h.bytes()).all(|b| b.is_ascii_digit()));
+    if sized { &url[..at - 1] } else { url }
 }
 /// A file name for a picture's address: its last path segment, made safe for Windows.
 fn file_name(url:&str)->String{
@@ -473,6 +507,17 @@ mod tests {
         assert_eq!(file_name("https://media.discordapp.net/x/a%3Cb>.gif"),"a%3Cb_.gif");
         assert_eq!(file_name("https://example.com/"),"image.png");
         assert_eq!(file_name("https://example.com/photo"),"photo.png");
+    }
+    #[test]
+    fn proxy_pictures_are_fetched_at_display_size_and_open_full_size(){
+        let attachment="https://media.discordapp.net/attachments/1/2/cat.gif?ex=a&hm=b";
+        let sized=proxy_sized(attachment,Some(1600),Some(800),2.0);
+        assert_eq!(sized,format!("{attachment}&width=720&height=360"));
+        assert_eq!(full_size(&sized),attachment);
+        assert_eq!(proxy_sized(attachment,Some(200),Some(100),2.0),attachment,"small pictures are fetched as they are");
+        assert_eq!(proxy_sized("https://images-ext-1.discordapp.net/external/x/https/media.tenor.com/a.mp4",Some(1000),Some(800),1.0),"https://images-ext-1.discordapp.net/external/x/https/media.tenor.com/a.mp4","videos can't be resized");
+        assert_eq!(proxy_sized("https://cdn.discordapp.com/attachments/1/2/a.png",Some(4000),Some(4000),1.0),"https://cdn.discordapp.com/attachments/1/2/a.png","only the proxy resizes");
+        assert_eq!(full_size("https://media.tenor.com/a.gif?width=x"),"https://media.tenor.com/a.gif?width=x");
     }
     #[test]
     fn mentions_read_as_names_and_picked_names_are_sent_as_ids(){
