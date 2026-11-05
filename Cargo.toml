@@ -18,6 +18,7 @@ base64 = "0.22"
 prost = "0.13"
 image = { version = "0.25", default-features = false, features = ["png", "gif", "jpeg", "webp"] }
 rfd = { version = "0.15", default-features = false }
+memmap2 = "0.9"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_System_Time", "Win32_System_SystemInformation", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_UI_Shell", "Win32_Security_Credentials"] }
 windows = { version = "=0.61.3", features = ["Media_Control", "Foundation", "Foundation_Collections", "Storage_Streams", "Win32_System_WinRT"] }
 

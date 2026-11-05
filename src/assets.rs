@@ -591,11 +591,10 @@ impl Images {
             self.textures.remove(&key);
         }
         self.clock = self.clock.wrapping_add(1);
-        let handle = ctx.load_texture(
-            &key,
-            data.frames[0].image.clone(),
-            egui::TextureOptions::LINEAR,
-        );
+        // A still image never re-uploads, so its pixels move to the GPU and no copy stays in RAM.
+        // Animations keep every frame to swap them in. `bytes` still counts the GPU texture.
+        let first = if data.frames.len() == 1 { std::mem::take(&mut data.frames[0].image) } else { data.frames[0].image.clone() };
+        let handle = ctx.load_texture(&key, first, egui::TextureOptions::LINEAR);
         self.textures.insert(
             key,
             Texture {

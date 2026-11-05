@@ -1050,6 +1050,7 @@ dependencies = [
  "discord-voice",
  "eframe",
  "image",
+ "memmap2",
  "model",
  "platform",
  "prost",

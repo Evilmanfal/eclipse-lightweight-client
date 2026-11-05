@@ -10,7 +10,7 @@ use std::{
     collections::{HashMap,VecDeque},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
+        Arc, Condvar, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -210,10 +210,26 @@ pub fn start(token: String, ctx: egui::Context) -> Backend {
                 }
             }
         });
+        // Message history has its own lane so opening a conversation never waits behind profile,
+        // member, settings or other requests on this queue. Several fetches run at once and the
+        // newest request goes first, so the channel you click overtakes background prefetches.
+        let history = HistoryLane::default();
+        for _ in 0..HISTORY_WORKERS {
+            let (lane, token, cancel, events, ctx) = (history.clone(), token.clone(), cancel_worker.clone(), events.clone(), ctx.clone());
+            thread::spawn(move || {
+                let Ok(mut api) = Api::new(token, cancel.clone()) else { return };
+                while let Some(command) = lane.next(&cancel) {
+                    let event = api.command(command).unwrap_or_else(Event::Error);
+                    if !emit(&events, &ctx, event) { break; }
+                }
+            });
+        }
         let mut queued=VecDeque::new();
         while !cancel_worker.load(Ordering::Relaxed) {
             if queued.is_empty(){match commands.recv_timeout(Duration::from_millis(400)){Ok(c)=>queued.push_back(c),Err(crossbeam_channel::RecvTimeoutError::Timeout)=>continue,Err(_)=>break}}
             queued.extend(commands.try_iter().take(64usize.saturating_sub(queued.len())));
+            queued=queued.into_iter().filter_map(|command|history.offer(command)).collect();
+            if queued.is_empty(){continue;}
             let now=Instant::now();
             let index=queued.iter().enumerate().filter(|(_,c)|command_ready(&api.limits,c).is_none_or(|ready|ready<=now)).min_by_key(|(i,c)|(command_priority(c),*i)).map(|(i,_)|i);
             let Some(index)=index else{thread::sleep(Duration::from_millis(100));continue;};
@@ -266,6 +282,39 @@ impl Limits{
     }
     fn delay(&mut self,method:&Method,route:&str,seconds:f64,global:bool){let until=Instant::now()+Duration::from_secs_f64(seconds.clamp(0.,3600.)+0.1);if global{self.global=Some(self.global.unwrap_or(until).max(until));}else{let key=self.key(method,route);self.deadlines.entry(key).and_modify(|old|*old=(*old).max(until)).or_insert(until);}}
 }
+/// Threads fetching message history at once. Each channel has its own Discord rate-limit bucket.
+const HISTORY_WORKERS: usize = 3;
+/// Waiting history requests, newest last. Older prefetches beyond this are dropped.
+const HISTORY_QUEUE: usize = 40;
+#[derive(Clone, Default)]
+struct HistoryLane(Arc<(Mutex<VecDeque<Command>>, Condvar)>);
+impl HistoryLane {
+    /// Takes History and Around commands (returns None); everything else is handed back.
+    fn offer(&self, command: Command) -> Option<Command> {
+        if !matches!(command, Command::History(..) | Command::Around(..)) { return Some(command); }
+        let (queue, ready) = &*self.0;
+        let Ok(mut queue) = queue.lock() else { return None };
+        // A newer request for the same page replaces the waiting one, so it moves to the front.
+        queue.retain(|waiting| !same_page(waiting, &command));
+        queue.push_back(command);
+        while queue.len() > HISTORY_QUEUE { queue.pop_front(); }
+        ready.notify_one();
+        None
+    }
+    /// The newest waiting request, or None once the client disconnects.
+    fn next(&self, cancel: &AtomicBool) -> Option<Command> {
+        let (queue, ready) = &*self.0;
+        let mut queue = queue.lock().ok()?;
+        loop {
+            if cancel.load(Ordering::Relaxed) { return None; }
+            if let Some(command) = queue.pop_back() { return Some(command); }
+            queue = ready.wait_timeout(queue, Duration::from_millis(400)).ok()?.0;
+        }
+    }
+}
+fn same_page(a: &Command, b: &Command) -> bool {
+    match (a, b) { (Command::History(x, before_x), Command::History(y, before_y)) => x == y && before_x == before_y, (Command::Around(x, at_x), Command::Around(y, at_y)) => x == y && at_x == at_y, _ => false }
+}
 fn command_priority(command:&Command)->u8{match command{Command::History(..)|Command::Around(..)|Command::Channels(..)=>1,Command::Request{method,..}if *method==Method::GET=>2,_=>0}}
 fn command_ready(limits:&Limits,command:&Command)->Option<Instant>{match command{Command::History(id,_)|Command::Around(id,_)=>Some(limits.until(&Method::GET,&format!("/channels/{id}/messages"))),Command::Channels(id)=>Some(limits.until(&Method::GET,&format!("/guilds/{id}/channels"))),Command::Request{method,route,..}=>Some(limits.until(method,route)),_=>limits.global}}
 struct Api {
@@ -280,6 +329,9 @@ impl Api {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(10))
+            // Keep warm connections to Discord so a click after a quiet minute skips a new TLS handshake.
+            .pool_idle_timeout(Duration::from_secs(300))
+            .tcp_keepalive(Duration::from_secs(30))
             .user_agent("EclipseNative/0.8 (Windows; independent native client)")
             .redirect(reqwest::redirect::Policy::none())
             .build()
@@ -1066,6 +1118,18 @@ mod tests {
         )
         .is_none());
         assert!(ready_folders(&json!({"user_settings_proto":encoded})).is_some());
+    }
+    #[test]
+    fn history_lane_serves_the_newest_request_first_without_duplicates() {
+        let lane = HistoryLane::default();
+        let cancel = AtomicBool::new(false);
+        assert!(lane.offer(Command::Refresh).is_some(), "other commands stay on the main queue");
+        for id in ["prefetch-a", "prefetch-b", "clicked", "prefetch-a"] { assert!(lane.offer(Command::History(id.into(), None)).is_none()); }
+        let order: Vec<String> = std::iter::from_fn(|| { let empty = lane.0 .0.lock().unwrap().is_empty(); if empty { None } else { lane.next(&cancel) } })
+            .map(|c| match c { Command::History(id, _) => id, _ => unreachable!() }).collect();
+        assert_eq!(order, ["prefetch-a", "clicked", "prefetch-b"], "a repeated request moves to the front and is fetched once");
+        for i in 0..HISTORY_QUEUE + 5 { lane.offer(Command::History(i.to_string(), None)); }
+        assert_eq!(lane.0 .0.lock().unwrap().len(), HISTORY_QUEUE, "old prefetches are dropped beyond the limit");
     }
     #[test]
     fn falls_back_to_legacy_folders_without_writing_settings() {
