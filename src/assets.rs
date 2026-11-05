@@ -168,6 +168,15 @@ impl Decoded {
         0
     }
 }
+thread_local! {
+    /// Set by a download worker for its current job: receives an animation's first frame as
+    /// soon as it is decoded, so it can be shown while the remaining frames decode.
+    static FIRST_FRAME: std::cell::RefCell<Option<Box<dyn FnMut(&ColorImage)>>> = const { std::cell::RefCell::new(None) };
+}
+/// Hands an animation's first frame to the waiting worker, once per job.
+fn first_frame_ready(image: &ColorImage) {
+    FIRST_FRAME.with(|slot| if let Some(mut send) = slot.borrow_mut().take() { send(image) });
+}
 fn decode_gif(bytes: &[u8], size: u32) -> Result<Decoded, ()> {
     let mut decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).map_err(|_| ())?;
     let mut limits = image::Limits::default();
@@ -214,6 +223,7 @@ fn decode_frames(
                 ),
                 delay,
             });
+            if frames.len() == 1 { first_frame_ready(&frames[0].image); }
         } else if let Some(last) = frames.last_mut() {
             last.delay += delay;
         }
@@ -478,10 +488,15 @@ impl Images {
                         Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
                         Err(_) => break,
                     };
-                    let (source,size)=source_key(&job.key);
-                    let image = if let Some(bytes) = bundled(source) {
-                        decode_sized(bytes,size)
-                    } else if let Some(key) = source.strip_prefix("demo://") {
+                    let (source,_)=source_key(&job.key);
+                    // An animation's first frame goes on screen as soon as it decodes; the full
+                    // animation replaces it when every frame is ready.
+                    let (early, early_key, early_ctx, generation) = (results.clone(), job.key.clone(), ctx.clone(), job.generation);
+                    FIRST_FRAME.with(|slot| *slot.borrow_mut() = Some(Box::new(move |image: &ColorImage| {
+                        let still = Ready { generation, key: early_key.clone(), image: Ok(Decoded::still(image.clone())) };
+                        if early.try_send(still).is_ok() { early_ctx.request_repaint(); }
+                    })));
+                    let image = if let Some(key) = source.strip_prefix("demo://") {
                         Ok(demo_asset(key))
                     } else {
                         client
@@ -489,6 +504,7 @@ impl Images {
                             .ok_or(())
                             .and_then(|c| download(c, &job.key))
                     };
+                    FIRST_FRAME.with(|slot| slot.borrow_mut().take());
                     let mut ready = Ready {
                         generation: job.generation,
                         key: job.key,
@@ -524,6 +540,12 @@ impl Images {
             generation: 0,
             clock: 0,
         }
+    }
+    /// Leaving a conversation frees its decoded attachments, embeds and GIFs: the largest
+    /// images, and every frame of an animation. Avatars, server icons, emoji, role icons and
+    /// decorations stay, since they are on screen in every conversation.
+    pub fn release_conversation(&mut self) {
+        self.textures.retain(|key, _| kept_across_conversations(key));
     }
     pub fn clear(&mut self) {
         self.generation = self.generation.wrapping_add(1);
@@ -591,11 +613,10 @@ impl Images {
             self.textures.remove(&key);
         }
         self.clock = self.clock.wrapping_add(1);
-        let handle = ctx.load_texture(
-            &key,
-            data.frames[0].image.clone(),
-            egui::TextureOptions::LINEAR,
-        );
+        // A still image never re-uploads, so its pixels move to the GPU and no copy stays in RAM.
+        // Animations keep every frame to swap them in. `bytes` still counts the GPU texture.
+        let first = if data.frames.len() == 1 { std::mem::take(&mut data.frames[0].image) } else { data.frames[0].image.clone() };
+        let handle = ctx.load_texture(&key, first, egui::TextureOptions::LINEAR);
         self.textures.insert(
             key,
             Texture {
@@ -732,14 +753,11 @@ impl Images {
 }
 /// Server icons and user avatars (including Discord's default avatars).
 fn is_icon(key:&str)->bool{let source=source_key(key).0;source.contains("/icons/")||source.contains("/avatars/")||source.contains("/embed/avatars/")}
+fn kept_across_conversations(key:&str)->bool{
+    let source=source_key(key).0;
+    is_icon(key)||source.starts_with("demo://")||["/emojis/","/role-icons/","/avatar-decoration-presets/","/assets/collectibles/","/app-icons/","/guild-tag-badges/","/clan-badges/","/badge-icons/"].iter().any(|path|source.contains(path))
+}
 fn hovered(ctx:&egui::Context,rect:egui::Rect)->bool{ctx.pointer_hover_pos().is_some_and(|p|rect.contains(p))}
-fn bundled(key:&str)->Option<&'static [u8]>{match key{
-    "builtin://discord/nitro-background"=>Some(include_bytes!("../assets/discord/nitro-background.png")),
-    "builtin://discord/nitro-wumpus"=>Some(include_bytes!("../assets/discord/nitro-wumpus.webp")),
-    "builtin://discord/shop-banner"=>Some(include_bytes!("../assets/discord/shop-banner.png")),
-    "builtin://discord/quests-banner"=>Some(include_bytes!("../assets/discord/quests-banner.webp")),
-    _=>None,
-}}
 pub fn animation_check(path:&str)->serde_json::Value {
     let result=std::fs::metadata(path).map_err(|_|()).and_then(|m|if m.len()<=GIF_LIMIT{std::fs::read(path).map_err(|_|())}else{Err(())}).and_then(|bytes|decode(&bytes));
     match result {Ok(image)=>serde_json::json!({"decoded":true,"frames":image.frames.len(),"cycle_ms":image.frames.iter().map(|f|f.delay.as_millis()).sum::<u128>(),"pixel_bytes":image.frames.iter().map(|f|f.image.pixels.len()*4).sum::<usize>(),"first_size":image.frames[0].image.size}),Err(())=>serde_json::json!({"decoded":false})}
@@ -751,7 +769,7 @@ fn decode_video(bytes:&[u8],size:u32)->Result<Decoded,()>{
     for index in 0..1800{let Some(voice_platform::video::Sample::Video{pts,width,height,rgba})=decoder.read_video().map_err(|_|())?else{break;};
         if !pts.is_finite(){return Err(());}if index>0{if let Some(last)=frames.last_mut(){last.delay+=Duration::from_secs_f64((pts-last_pts).clamp(0.001,1.));}}last_pts=pts;
         if index%stride==0{if frames.len()>=FRAME_LIMIT{let mut old=std::mem::take(&mut frames).into_iter();while let Some(mut frame)=old.next(){if let Some(next)=old.next(){frame.delay+=next.delay;}frames.push(frame);}stride*=2;sampled=true;}
-            let source=image::RgbaImage::from_raw(width,height,rgba).ok_or(())?;let small=image::DynamicImage::ImageRgba8(source).thumbnail(edge.min(width),edge.min(height)).to_rgba8();frames.push(Frame{image:ColorImage::from_rgba_unmultiplied([small.width()as usize,small.height()as usize],small.as_raw()),delay:Duration::ZERO});}
+            let source=image::RgbaImage::from_raw(width,height,rgba).ok_or(())?;let small=image::DynamicImage::ImageRgba8(source).thumbnail(edge.min(width),edge.min(height)).to_rgba8();frames.push(Frame{image:ColorImage::from_rgba_unmultiplied([small.width()as usize,small.height()as usize],small.as_raw()),delay:Duration::ZERO});if frames.len()==1{first_frame_ready(&frames[0].image);}}
         while frames.iter().map(|f|f.image.pixels.len()*4).sum::<usize>()>ASSET_BUDGET{edge=(edge*3/4).max(16);shrink_frames(&mut frames,edge);}
     }if let Some(last)=frames.last_mut(){last.delay+=Duration::from_millis(33);}Decoded::new(frames,sampled)
 }
@@ -843,12 +861,23 @@ fn demo_image(key: &str, phase: f32, size: usize) -> ColorImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]fn leaving_a_conversation_keeps_avatars_and_emoji_but_frees_chat_media(){
+        for kept in ["https://cdn.discordapp.com/avatars/1/a.png","https://cdn.discordapp.com/icons/2/b.webp","https://cdn.discordapp.com/emojis/3.gif","https://cdn.discordapp.com/role-icons/4/c.png"]{assert!(kept_across_conversations(kept),"{kept}");}
+        for freed in ["https://cdn.discordapp.com/attachments/5/6/photo.png","https://media.discordapp.net/attachments/5/6/clip.gif","https://media.tenor.com/abc/tenor.gif","https://images-ext-1.discordapp.net/external/x/y.png"]{assert!(!kept_across_conversations(freed),"{freed}");}
+    }
     #[test]fn sixty_fps_playback_does_not_retain_the_old_thirty_fps_upload_gate(){
         let data=Decoded::new((0..60).map(|_|Frame{image:ColorImage::new([1,1],vec![egui::Color32::WHITE]),delay:Duration::from_millis(17)}).collect(),false).unwrap();
         let start=Instant::now();let mut playback=Playback::default();playback.advance(start,&data,FRAME_INTERVAL);
         for i in 1..=30{assert!(playback.advance(start+Duration::from_millis(i*17),&data,FRAME_INTERVAL).is_some());}
         assert_eq!(playback.uploads,30);
         let mut cache=Images::new(&egui::Context::default());cache.playback_options(true,60);assert!(cache.frame_interval<Duration::from_millis(17));
+    }
+    #[test]fn an_animation_reports_its_first_frame_before_the_rest_decode(){
+        let seen=std::rc::Rc::new(std::cell::Cell::new(0usize));let counter=seen.clone();
+        FIRST_FRAME.with(|slot|*slot.borrow_mut()=Some(Box::new(move |image:&ColorImage|{assert_eq!(image.size,[64,16]);counter.set(counter.get()+1);})));
+        let frames=(0..10).map(|_|Ok(image::Frame::from_parts(image::RgbaImage::from_pixel(64,16,image::Rgba([1,2,3,255])),0,0,image::Delay::from_numer_denom_ms(50,1))));
+        assert_eq!(decode_frames(frames,512).unwrap().frames.len(),10);
+        assert_eq!(seen.get(),1,"the first frame is handed over once, not per frame");
     }
     #[test]fn display_sizing_keeps_large_art_sharp_and_animation_resolution_bounded(){
         assert_eq!(resolution(egui::vec2(40.,40.),2.),128);assert_eq!(resolution(egui::vec2(360.,150.),2.),1024);

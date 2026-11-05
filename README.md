@@ -27,7 +27,7 @@ Voice channels list everyone connected, including people using the official Disc
 
 User and Server Settings use matching centered panels, grouped navigation and rounded content cards. Navigation rows highlight on hover without repeating their label in a tooltip. Click the dark backdrop, press Escape or use × to close. Friendly account/device/service names replace raw numeric fields; technical IDs are under Developer mode. Language and processing controls use readable labels. Performance offers Smooth, Balanced and Save memory presets.
 
-User Settings has 26 sections grouped under Your Account, Privacy & Safety, Billing & Nitro, App Settings, Activity and Eclipse. Account & Profile combines the previous My Account and Profiles pages. Native controls cover profile display name, pronouns, bio, avatar/accent; supported account preferences; appearance, accessibility, chat, voice devices/processing, hotkeys, plugins, themes and performance. Account changes require Save/action; local preferences save automatically.
+User Settings has 21 sections grouped under Your Account, Privacy & Safety, App Settings, Activity and Eclipse. Account & Profile combines the previous My Account and Profiles pages. Native controls cover profile display name, pronouns, bio, avatar/accent; supported account preferences; appearance, accessibility, chat, voice devices/processing, hotkeys, plugins, themes and performance. Account changes require Save/action; local preferences save automatically.
 
 Connections, devices, authorized apps, subscriptions, gift inventory and boosts retrieve account information. Security/MFA, billing, family controls and incomplete flows link to Discord. Language updates the account locale; Eclipse's interface remains English. **Not every Discord setting is implemented natively.**
 
@@ -39,7 +39,6 @@ Thirteen licensed display-name font families are bundled, with Unicode fallbacks
 
 Hold Shift while hovering a message to reveal compact edit/delete buttons. Edit is available for your own messages; delete follows ownership/server permissions and still asks for confirmation. Right-click messages, author names/avatars, members and channels. Direct-message rows expose the recipient actions directly, without an extra Recipient submenu. Menus include replies, copying, reactions, permitted edits/deletes/pins, mark unread, profiles, DM/friend/block actions, local volume and permitted server roles/moderation. DM rows accept clicks across their width. The + beside Direct messages opens an anchored, searchable name/@username dropdown (outside click or Escape dismisses it) for friends, DM recipients and loaded server members, with self/blocked accounts excluded. It does not offer a global Discord user directory. Decorated channel names use installed Windows font fallbacks.
 
-Shop cards resolve each product’s preview, decoration hash, matching profile-effect configuration or nameplate asset. Quests resolve hero/reward filenames and CDN-root paths against the matching quest. Missing live metadata shows artwork unavailable rather than substituting an unrelated product illustration. Public asset routes were checked against [Discord’s client](https://discord.com/app) on October 8, 2026; account-specific availability remains unverified.
 
 ## Native plugin equivalents
 
@@ -62,11 +61,10 @@ Themes include presets, native JSON import/export and selected literal Discord C
 
 OpenAsar-like performance goals are addressed through native rendering, bounded caches/queues/history, idle repaint, reduced motion and animation FPS controls. No Discord installation is patched.
 
-## Friends, Nitro, Shop, Quests and media
+## Friends and media
 
-Friends has Online/All/Pending/Blocked/Add Friend, search, requests, profiles and DMs. Nitro shows reported subscription status and supported benefits. Existing entitlements determine message length/emoji/avatars/streaming; Eclipse does not grant subscriptions. Message limits are 2,000 or 4,000 for reported full Nitro; Discord enforces uploads.
+Friends has Online/All/Pending/Blocked/Add Friend, search, requests, profiles and DMs. Existing entitlements determine message length/emoji/avatars/streaming; Eclipse does not grant subscriptions. Message limits are 2,000 or 4,000 for reported full Nitro; Discord enforces uploads.
 
-Nitro uses official Discord Wumpus artwork. Shop and Quests include official Discord artwork as their default banners, with bundled assets for offline use. Live collections/quests use their account-supplied banner/card artwork when available. Asset URLs and SHA-256 hashes are recorded in assets/discord/SOURCES.json; Discord retains the rights to its artwork. Shop has a featured banner, collectible-type tabs and a responsive product-card grid. Quests has a featured banner, Discover/Accepted/Completed tabs and cards for artwork, rewards and account progress. These native layouts follow Discord's organization, without claiming pixel-identical rendering. Shop retrieves the live catalog; checkout uses Discord. Quests retrieves offers/progress and supports enrollment; detection, watch tracking, completion and reward claiming use Discord. Offline example cards are explicitly labeled and disabled; they never represent account eligibility, purchases or earned progress.
 
 Messages from today show only local time. Earlier local calendar days show the time plus date (for example `16:21 · Oct 7, 2026`). Windows timezone/DST conversion determines the day, including near midnight. Timestamp labels have a bounded in-memory cache that refreshes on date/timezone changes.
 

@@ -101,7 +101,6 @@ pub const COMPACT_SCALE:f32=0.85;
 pub const USER_CATEGORIES:&[(&str,&[&str])]=&[
     ("YOUR ACCOUNT", &["Account & Profile","Connections","Devices","Authorized Apps"]),
     ("PRIVACY & SAFETY", &["Content & Social","Data & Privacy","Family Center"]),
-    ("BILLING & NITRO", &["Nitro","Server Boost","Subscriptions","Gift Inventory","Billing"]),
     ("APP SETTINGS", &["Appearance","Accessibility","Voice & Video","Chat","Notifications","Keybinds","Language","Streamer Mode","Advanced"]),
     ("ACTIVITY", &["Activity Privacy","Registered Games"]),
     ("ECLIPSE", &["Plugins","Themes","Performance"]),

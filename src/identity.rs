@@ -69,14 +69,6 @@ pub fn vertical_gradient_shape(rect: egui::Rect, top: Color32, bottom: Color32, 
     let count=mesh.vertices.len()as u32-1;for i in 1..=count{mesh.add_triangle(0,i,if i==count{1}else{i+1});}
     egui::Shape::mesh(mesh)
 }
-pub fn gradient(ui: &egui::Ui, rect: egui::Rect, a: Color32, b: Color32) {
-    let mut mesh = egui::Mesh::default();
-    let r=14_f32.min(rect.width()/2.).min(rect.height()/2.);
-    mesh.colored_vertex(rect.center(),a.lerp_to_gamma(b,0.5));
-    let corners=[egui::pos2(rect.right()-r,rect.top()+r),egui::pos2(rect.right()-r,rect.bottom()-r),egui::pos2(rect.left()+r,rect.bottom()-r),egui::pos2(rect.left()+r,rect.top()+r)];
-    for (corner,center) in corners.into_iter().enumerate(){for step in 0..=8{let angle=(corner as f32-1.)*std::f32::consts::FRAC_PI_2+step as f32/8.*std::f32::consts::FRAC_PI_2;let p=center+Vec2::angled(angle)*r;mesh.colored_vertex(p,a.lerp_to_gamma(b,((p.x-rect.left())/rect.width().max(1.)).clamp(0.,1.)));}}
-    let count=mesh.vertices.len()as u32-1;for i in 1..=count{mesh.add_triangle(0,i,if i==count{1}else{i+1});}ui.painter().add(mesh);
-}
 pub fn name(ui: &mut egui::Ui, user: &User, label: &str, size: f32, fallback: Color32) -> egui::Response {
     let data = user.display_name_styles.as_ref().unwrap_or(&Value::Null);
     let font = data["font_id"].as_u64().unwrap_or(11);

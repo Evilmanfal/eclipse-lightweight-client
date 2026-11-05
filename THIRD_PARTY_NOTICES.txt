@@ -1,6 +1,6 @@
 Eclipse Native 0.7 — third-party notices
 
-Discord interface artwork: assets/discord/SOURCES.json records official source pages, CDN URLs and SHA-256 hashes. Discord and its artists retain all rights to this artwork and branding; these images are not relicensed under Eclipse's MIT license. See assets/discord/NOTICE.txt. Eclipse is independent and is not endorsed by Discord. The six PCM feedback sounds in assets/sounds/ are original Eclipse earcons under Eclipse's MIT license; no Discord audio is redistributed.
+Eclipse is independent and is not endorsed by Discord. The six PCM feedback sounds in assets/sounds/ are original Eclipse earcons under Eclipse's MIT license; no Discord audio is redistributed.
 
 Versions are pinned in Cargo.lock. This package includes native media components adapted from Serein, commit a76e030d749ef558e687bbff6dc592a7dddec244, MIT OR Apache-2.0. The complete component licenses, source, and patch notes are supplied in vendor/. No system fonts are redistributed.
 

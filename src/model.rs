@@ -88,6 +88,13 @@ pub struct Attachment {
     pub url: String,
     #[serde(default)]
     pub size: u64,
+    /// Discord's media-proxy copy, which can be fetched resized.
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
 }
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Emoji {
@@ -166,6 +173,17 @@ pub struct Message {
     /// Users mentioned in the message, so <@id> can be shown as a name.
     #[serde(default)]
     pub mentions: Vec<User>,
+    /// Buttons, select menus and Components V2 layouts sent by apps and bots.
+    #[serde(default)]
+    pub components: Vec<serde_json::Value>,
+    /// True when @everyone or @here in this message notified people.
+    #[serde(default)]
+    pub mention_everyone: bool,
+    /// Slash command that produced this message (who used which command).
+    #[serde(default)]
+    pub interaction_metadata: Option<serde_json::Value>,
+    #[serde(default)]
+    pub interaction: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

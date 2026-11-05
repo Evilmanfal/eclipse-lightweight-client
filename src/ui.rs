@@ -24,7 +24,7 @@ const LOG_RED: Color32 = Color32::from_rgb(242, 124, 133);
 const BORDER: Color32 = Color32::from_gray(46);
 const DM_PAGE_SIZE: usize = 25;
 #[path="panels.rs"] mod panels;
-#[derive(Clone,Copy,PartialEq)] enum Home { Chat, Friends, Nitro, Shop, Quests }
+#[derive(Clone,Copy,PartialEq)] enum Home { Chat, Friends }
 use crate::timeline::Logged;
 
 pub struct Eclipse {
@@ -135,8 +135,6 @@ pub struct Eclipse {
     profile_guild: Option<String>,
     profile_just_opened: bool,
     voice_revealed: Option<String>,
-    shop_filter: String,
-    quest_filter: String,
     spotify:Option<crate::spotify::Spotify>,
     game_activity:bool,
     read_latest:HashMap<String,String>,
@@ -272,7 +270,7 @@ impl Eclipse {
             picker: Default::default(),
             calls: crate::calls::Calls::new(ctx.clone()),
             applied_prefs:prefs.clone(),prefs,prefs_save_at:None,home:Home::Chat,
-            settings_page:"Account & Profile".into(),settings_search:String::new(),server_settings:false,server_page:"Overview".into(),server:Default::default(),features:HashMap::new(),feature_errors:HashMap::new(),feature_pending:HashSet::new(),account_edit:serde_json::Value::Null,settings_edit:serde_json::Value::Null,server_edit:serde_json::Value::Null,role_edit:None,profile:None,friends:vec![],friend_filter:"Online".into(),friend_search:String::new(),friend_add:String::new(),member_search:String::new(),reply:None,logs:VecDeque::new(),profile_anchor:None,profile_guild:None,profile_just_opened:false,voice_revealed:None,shop_filter:"All".into(),quest_filter:"Discover".into(),spotify:None,game_activity:true,read_latest:HashMap::new(),confirm:None,hotkey_record:None,audio_devices:None,last_typing:None,composer_ime:false,mention_open:false,mention_pick:0,mention_ids:HashMap::new(),mention_query:String::new(),server_emojis:HashMap::new(),stream_preview_fetched:HashMap::new(),prefetched:HashMap::new(),dms_prefetched:false,focus_message_box:false,updater:Default::default(),
+            settings_page:"Account & Profile".into(),settings_search:String::new(),server_settings:false,server_page:"Overview".into(),server:Default::default(),features:HashMap::new(),feature_errors:HashMap::new(),feature_pending:HashSet::new(),account_edit:serde_json::Value::Null,settings_edit:serde_json::Value::Null,server_edit:serde_json::Value::Null,role_edit:None,profile:None,friends:vec![],friend_filter:"Online".into(),friend_search:String::new(),friend_add:String::new(),member_search:String::new(),reply:None,logs:VecDeque::new(),profile_anchor:None,profile_guild:None,profile_just_opened:false,voice_revealed:None,spotify:None,game_activity:true,read_latest:HashMap::new(),confirm:None,hotkey_record:None,audio_devices:None,last_typing:None,composer_ime:false,mention_open:false,mention_pick:0,mention_ids:HashMap::new(),mention_query:String::new(),server_emojis:HashMap::new(),stream_preview_fetched:HashMap::new(),prefetched:HashMap::new(),dms_prefetched:false,focus_message_box:false,updater:Default::default(),
         };
         app.calls.configure(&app.prefs);
         app.images.playback_options(app.prefs.animations&&!app.prefs.reduced_motion,app.prefs.animation_fps);
@@ -378,6 +376,25 @@ impl Eclipse {
             "server-zoom"=>{self.prefs.zoom=1.5;self.server_settings=true;},
             "quick-actions"=>{self.preview_gesture=Some("message");if let Some(message)=self.messages.back_mut(){if let Some(user)=&self.user{message.author=user.clone();}}},
             "server-hover"=>self.preview_gesture=Some("server"),
+            "wide-message"=>{if let Some(last)=self.messages.back().cloned(){
+                let link="https://fixupx.com/shamscharania/status/2115497882790875386?a=-HeFTo9eJrqEKq8qUaM&s=46";
+                let mut first=Message{id:"wide-1".into(),content:format!("{link} @im"),..last.clone()};first.reactions.clear();first.attachments.clear();first.referenced_message=None;
+                first.embeds=vec![crate::model::Embed{kind:"rich".into(),title:Some("Shams Charania (@ShamsCharania)".into()),description:Some(r"Indiana Pacers star Tyrese Haliburton has sustained a left hamstring strain and will miss time, sources tell ESPN\. Pacers doctors and Haliburton are now gathering a clear timeline\.
+
+**[💬](https://x.com/intent/tweet?in_reply_to=2115497882790875386) 2\.5K [🔁](https://x.com/intent/retweet?tweet_id=2115497882790875386) 2\.3K [❤️](https://x.com/intent/like?tweet_id=2115497882790875386) 26\.3K 👁️ 2\.21M **".into()),url:Some(link.into()),color:Some(0x1da1f2),..Default::default()}];
+                let mut reply=Message{id:"wide-2".into(),content:"OOOOOOOOOOOO WHY IS EVERYBODY GETTING INJURED".into(),..last.clone()};reply.reactions.clear();reply.embeds.clear();reply.attachments.clear();reply.referenced_message=Some(Box::new(first.clone()));
+                let mut long=Message{id:"wide-3".into(),content:"x".repeat(400),..last};long.reactions.clear();long.embeds.clear();long.attachments.clear();long.referenced_message=None;
+                self.messages.extend([first,reply,long]);}},
+            "mention-highlight"=>{if let (Some(channel),Some(mut member))=(self.channel.clone(),self.server.members.values().find(|m|m.name()=="Jordan").cloned()){
+                member.user.id="4242".into();self.server.members.insert("4242".into(),member.clone());
+                let label=format!("@{}",member.user.username);self.mention_ids.insert(label.clone(),member.user.id.clone());
+                self.drafts.insert(channel.id.clone(),format!("hey {label} and @everyone, check this out"));self.focus_message_box=true;
+                if let Some(last)=self.messages.back().cloned(){let mut message=Message{id:"mention-highlight".into(),content:format!("<@{}> can you look at this? @everyone",member.user.id),mention_everyone:true,..last};message.referenced_message=None;message.reactions.clear();message.embeds.clear();message.attachments.clear();self.messages.push_back(message);}}},
+            "app-message"=>{if let Some(last)=self.messages.back().cloned(){let mut bot=last.author.clone();bot.id="keto".into();bot.username="keto".into();bot.global_name=Some("Keto".into());let mut message=Message{id:"app-message".into(),author:bot,content:String::new(),edited_timestamp:Some("2026-11-03T14:02:00Z".into()),..last};message.referenced_message=None;message.reactions.clear();message.attachments.clear();message.embeds.clear();
+                message.interaction_metadata=Some(serde_json::json!({"name":"config","user":{"id":"3","username":"husain"}}));
+                message.components=serde_json::from_value(serde_json::json!([{"type":17,"components":[{"type":10,"content":"# 🔗 Autofix Configuration\nConfigure which social platforms have link fixing enabled."},{"type":14,"divider":true,"spacing":1},{"type":1,"components":[{"type":3,"custom_id":"a","placeholder":"Autofix","options":[{"label":"Autofix","value":"a","default":true,"emoji":{"name":"🔗"}}]}]},{"type":1,"components":[{"type":3,"custom_id":"b","options":[{"label":"X","value":"x","default":true,"emoji":{"name":"🟢"}}]}]},{"type":1,"components":[{"type":2,"style":4,"label":"Disable X","custom_id":"c"}]}]}])).unwrap_or_default();
+                self.messages.push_back(message);}},
+            "server-menu"=>{self.preview_gesture=Some("server-menu");self.prefs.developer=true;},
             "full-profile"=>{if let Some(mut user)=self.messages.front().map(|m|m.author.clone()){user.display_name_styles=Some(serde_json::json!({"font_id":14,"effect_id":2,"colors":[12034809,4437965]}));self.open_full_profile(&user);let key=crate::ui::panels::profile_key_for(&user.id,self.full_profile_guild.as_deref());self.features.insert(key,serde_json::json!({"user_profile":{"pronouns":"they / them","bio":"Building little things with good people.
 A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member":{"joined_at":"2021-10-13T00:00:00Z"},"connected_accounts":[{"type":"twitch","name":"eclipse","verified":true},{"type":"xbox","name":"Eclipse"}]}));}},
             "account-menu"=>{self.account_anchor=Some(egui::Rect::from_min_size(egui::pos2(4.,814.),Vec2::new(311.,52.)));self.account_just_opened=true;self.account_expanded=Some(0);},
@@ -388,10 +405,12 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             "inline-logs"=>{if let Some(old)=self.messages.get(self.messages.len().saturating_sub(2)).cloned(){self.log_message(old.clone(),false);let index=self.messages.len().saturating_sub(2);if let Some(message)=self.messages.get_mut(index){message.content="The updated message stays right here in the conversation.".into();message.edited_timestamp=Some("edited".into());}}if let Some(deleted)=self.messages.back().cloned(){self.log_message(deleted.clone(),true);self.messages.retain(|m|m.id!=deleted.id);}},
             "voice-sidebar"=>{if let(Some(channel),Some(user))=(self.channels.iter().find(|c|c.kind==2).cloned(),self.user.clone()){self.calls.preview(channel,user,vec![]);self.calls.chat=true;}},
             "voice"|"plugins"|"themes"|"performance"=>{self.settings=true;self.settings_page=match section{"voice"=>"Voice & Video","plugins"=>"Plugins","themes"=>"Themes",_=>"Performance"}.into();},
+            s if s.starts_with("settings:")=>{self.settings=true;self.settings_page=s["settings:".len()..].into();self.load_settings_section();self.preview_account_data();},
+            s if s.starts_with("server:")=>{self.server_settings=true;self.server_page=s["server:".len()..].into();self.load_server_page();},
             "server-settings"=>{self.server_settings=true;self.server_page="Overview".into();},
             "roles"=>{self.server_settings=true;self.server_page="Roles".into();},
             "friends"=>{self.navigate_home(Home::Friends);self.friend_filter="All".into();},
-            "nitro"=>self.navigate_home(Home::Nitro),"shop"=>self.navigate_home(Home::Shop),"quests"=>self.navigate_home(Home::Quests),
+
             "call-live"|"call-watching"|"stream-pip"|"stream-expanded"|"share-picker"=>{if let(Some(channel),Some(user))=(self.channel.clone(),self.user.clone()){let mut seen=HashSet::new();let peers=self.messages.iter().map(|m|m.author.clone()).filter(|u|u.id!=user.id&&seen.insert(u.id.clone())).take(3).collect();self.calls.preview(channel,user,peers);if section!="share-picker"{self.calls.preview_live(section!="call-live");self.calls.chat=section=="stream-pip";self.calls.expanded=section=="stream-expanded";}else{self.calls.preview_picker();}}},
             "call"=>{if let(Some(channel),Some(user))=(self.channel.clone(),self.user.clone()){let mut seen=HashSet::new();let peers=self.messages.iter().map(|m|m.author.clone()).filter(|u|u.id!=user.id&&seen.insert(u.id.clone())).take(3).collect();self.calls.preview(channel,user,peers);}},
             _=>{}
@@ -514,6 +533,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
         self.search.clear();
         self.composer_ime=false;
         self.messages.clear();
+        self.images.release_conversation();
         self.pins = None;
         self.pins_anchor = None;
         self.jump_to = None;
@@ -750,6 +770,11 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                                 if let Some(items) = data.get("embeds") {
                                     if let Ok(embeds) = serde_json::from_value(items.clone()) {
                                         message.embeds = embeds;
+                                    }
+                                }
+                                if let Some(items) = data.get("components") {
+                                    if let Ok(components) = serde_json::from_value(items.clone()) {
+                                        message.components = components;
                                     }
                                 }
                                 if let Some(items) = data.get("attachments") {
@@ -1366,10 +1391,15 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         let mut job=egui::text::LayoutJob::simple(name.clone(),egui::FontId::proportional(17.),TEXT,text_rect.width());job.wrap.max_rows=1;job.wrap.break_anywhere=true;let galley=ui.fonts(|fonts|fonts.layout_job(job));
                         ui.painter().with_clip_rect(text_rect).galley(egui::pos2(text_rect.left(),response.rect.center().y-galley.size().y/2.),galley,TEXT);
                         ui.painter().text(response.rect.right_center()-Vec2::new(12.,0.),egui::Align2::CENTER_CENTER,"⌄",egui::FontId::proportional(15.),MUTED);
-                        egui::Popup::menu(&response).id(egui::Id::new("server-header-menu")).show(|ui|{ui.set_min_width(225.);ui.strong(&name);ui.separator();
-                            if ui.button("Server Settings").clicked(){self.open_server_settings();ui.close();}
-                            if ui.button("Members & Roles").clicked(){self.open_server_settings();self.server_page="Members".into();self.load_server_page();ui.close();}
-                            if ui.button("Notification Settings").clicked(){self.open_server_settings();self.server_page="Notifications".into();self.load_server_page();ui.close();}
+                        crate::settings_layout::set_accent(ui.ctx(),self.accent());
+                        let menu_width=response.rect.width().max(220.)-12.;if self.preview_gesture==Some("server-menu"){egui::Popup::open_id(ui.ctx(),egui::Id::new("server-header-menu"));}
+                        egui::Popup::menu(&response).id(egui::Id::new("server-header-menu")).gap(6.)
+                            .frame(egui::Frame::NONE.fill(Color32::from_gray(17)).stroke(Stroke::new(1.0_f32,Color32::from_gray(44))).corner_radius(10).inner_margin(6).shadow(egui::Shadow{offset:[0,6],blur:18,spread:0,color:Color32::from_black_alpha(140)}))
+                            .show(|ui|{ui.set_width(menu_width);ui.spacing_mut().item_spacing.y=2.;use crate::settings_layout::{menu_item,menu_separator};
+                            if menu_item(ui,"Server Settings","⚙",false).clicked(){self.open_server_settings();ui.close();}
+                            if menu_item(ui,"Members & Roles","👥",false).clicked(){self.open_server_settings();self.server_page="Members".into();self.load_server_page();ui.close();}
+                            if menu_item(ui,"Notification Settings","🔔",false).clicked(){self.open_server_settings();self.server_page="Notifications".into();self.load_server_page();ui.close();}
+                            if self.prefs.developer{menu_separator(ui);if menu_item(ui,"Copy Server ID","🆔",false).clicked(){ui.ctx().copy_text(guild.id.clone());ui.close();}}
                         });
                     }else{
                         // Conversation search at the top, like Discord. The placeholder clears while focused and
@@ -1388,7 +1418,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     ui.add_space(if self.guild.is_some(){4.0}else{0.0});
                     if self.guild.is_none(){
                         ui.scope(|ui|{ui.spacing_mut().item_spacing.y=1.0;
-                            for(home,label)in[(Home::Friends,"Friends"),(Home::Nitro,"Nitro"),(Home::Shop,"Shop"),(Home::Quests,"Quests")]{if crate::widgets::home_row(ui,label,self.home==home,if self.home==home{TEXT}else{MUTED}).clicked(){self.navigate_home(home);}}
+                            for(home,label)in[(Home::Friends,"Friends")]{if crate::widgets::home_row(ui,label,self.home==home,if self.home==home{TEXT}else{MUTED}).clicked(){self.navigate_home(home);}}
                         });
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
@@ -1644,7 +1674,13 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     }
                     let file_height=if self.files.contains_key(&channel.id){32.0}else{0.0};
                     let scroll_height=(ui.available_height()-110.0-file_height).max(60.0);
-                    egui::ScrollArea::vertical().id_salt(("history",&channel.id)).stick_to_bottom(true).max_height(scroll_height).auto_shrink([false,false]).show(ui,|ui| {
+                    // The history gets a fixed area the width of the chat. A message wider than that (a long
+                    // unbroken link, a wide embed) is clipped at the edge instead of widening the whole column,
+                    // which pushed the message box and its buttons off screen.
+                    let (history_rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), scroll_height), egui::Sense::hover());
+                    let mut history = ui.new_child(egui::UiBuilder::new().max_rect(history_rect).layout(*ui.layout()));
+                    history.set_clip_rect(history_rect.intersect(ui.clip_rect()));
+                    egui::ScrollArea::vertical().id_salt(("history",&channel.id)).stick_to_bottom(true).max_height(scroll_height).auto_shrink([false,false]).show(&mut history,|ui| {
                         ui.spacing_mut().item_spacing.y = if self.compact { 0.0 } else { 2.0 };
                         if self.has_older&&!self.preview{
                             let enabled=self.messages.len()<HISTORY_LIMIT;
@@ -1696,6 +1732,13 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             .inner_margin(egui::Margin::symmetric(8, if grouped { 0 } else if self.compact { 2 } else { 4 }))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
+                if let Some((who, command)) = crate::components::command_use(message).filter(|_| message.referenced_message.is_none()) {
+                    ui.horizontal(|ui| {
+                        ui.add_space(49.0);
+                        ui.label(RichText::new(format!("{who} used")).size(12.0).color(MUTED));
+                        ui.label(RichText::new(format!("/{command}")).size(12.0).color(self.accent()));
+                    });
+                }
                 if let Some(reply) = &message.referenced_message {
                     ui.horizontal(|ui| {
                         ui.add_space(49.0);
@@ -1713,7 +1756,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         );
                         ui.add(
                             egui::Label::new(
-                                RichText::new(self.readable(reply,&crate::message_media::visible_content(reply,self.prefs.images)).chars().take(90).collect::<String>())
+                                RichText::new(crate::message_media::strip_marks(&self.readable(reply,&crate::message_media::visible_content(reply,self.prefs.images))).chars().take(90).collect::<String>())
                                     .size(12.0)
                                     .color(MUTED),
                             )
@@ -1777,12 +1820,17 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         for attachment in &message.attachments {
                             let inline=self.prefs.images&&assets::public_url(&attachment.url);
                             if inline {
+                                // Fetched from Discord's proxy at the size it's shown, when Discord says how big it is.
+                                let shown = attachment.proxy_url.as_deref().filter(|u| assets::public_url(u))
+                                    .map(|u| crate::message_media::proxy_sized(u, attachment.width, attachment.height, ui.ctx().pixels_per_point()))
+                                    .filter(|u| u.contains("width="))
+                                    .unwrap_or_else(|| attachment.url.clone());
                                 crate::message_media::picture(
                                     ui,
                                     &mut self.images,
-                                    &attachment.url,
-                                    None,
-                                    None,
+                                    &shown,
+                                    attachment.width,
+                                    attachment.height,
                                     true,
                                 );
                             }
@@ -1808,10 +1856,20 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         for embed in &message.embeds {
                             if self.prefs.images&&crate::message_media::media_embed(embed) {
                                 let animated=embed.video.as_ref().filter(|v|embed.kind=="gifv"||v.url.as_ref().is_some_and(|u|u.contains(".gif")));
-                                if let Some(image)=animated.or(embed.image.as_ref()).or(embed.thumbnail.as_ref()) {if let Some(url)=image.url.as_deref().filter(|u|assets::public_url(u)).or(image.proxy_url.as_deref()){crate::message_media::picture(ui,&mut self.images,url,image.width,image.height,true);}}
+                                if let Some(image)=animated.or(embed.image.as_ref()).or(embed.thumbnail.as_ref()) {
+                                    let ppp=ui.ctx().pixels_per_point();
+                                    // Discord's proxy copy can be fetched at the size it's shown; a video can't, so it keeps its own address.
+                                    let resized=image.proxy_url.as_deref().filter(|u|assets::public_url(u)).map(|u|crate::message_media::proxy_sized(u,image.width,image.height,ppp)).filter(|u|u.contains("width="));
+                                    // A GIF sent as video shows Discord's still preview while the clip loads.
+                                    let poster=animated.and(embed.thumbnail.as_ref()).and_then(|t|t.proxy_url.as_deref().or(t.url.as_deref()).map(|u|crate::message_media::proxy_sized(u,t.width,t.height,ppp)));
+                                    if let Some(url)=resized.or_else(||image.url.as_deref().filter(|u|assets::public_url(u)).or(image.proxy_url.as_deref()).map(str::to_owned)){crate::message_media::picture_with_poster(ui,&mut self.images,&url,image.width,image.height,true,poster.as_deref());}
+                                }
                             } else if embed.title.is_some()||embed.description.is_some()||embed.provider.is_some()||embed.author.is_some()||!embed.fields.is_empty() {
                                 ui.push_id(("embed",&message.id,embed.url.as_deref()),|ui|crate::message_media::embed_card(ui,&mut self.images,embed,self.prefs.images));
                             }
+                        }
+                        if !message.components.is_empty() {
+                            ui.push_id(("components",&message.id),|ui|crate::components::show(ui,&mut self.images,&message.components));
                         }
                         if !deleted && !message.reactions.is_empty() {
                             ui.horizontal_wrapped(|ui| {
@@ -1979,8 +2037,29 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                         else if let Some(path)=rfd::FileDialog::new().pick_file(){self.files.insert(channel.id.clone(),path);}
                     }
                     let mention_keys = self.mention_keys(ctx);
+                    // Picked @names (and @everyone / @here) show as highlighted pills while typing.
+                    let labels: Vec<String> = self.mention_ids.keys().cloned().collect();
+                    let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap: f32| {
+                        let text = text.as_str();
+                        let font = egui::TextStyle::Body.resolve(ui.style());
+                        let color = ui.visuals().text_color();
+                        let (fill, mention) = crate::message_media::mention_colors();
+                        let plain = egui::TextFormat::simple(font.clone(), color);
+                        let pill = egui::TextFormat { background: fill, color: mention, ..egui::TextFormat::simple(font, mention) };
+                        let mut job = egui::text::LayoutJob::default();
+                        let mut last = 0;
+                        for range in crate::message_media::mention_ranges(text, &labels.iter().map(String::as_str).collect::<Vec<_>>()) {
+                            job.append(&text[last..range.start], 0.0, plain.clone());
+                            job.append(&text[range.clone()], 0.0, pill.clone());
+                            last = range.end;
+                        }
+                        job.append(&text[last..], 0.0, plain);
+                        job.wrap.max_width = wrap;
+                        ui.fonts(|f| f.layout_job(job))
+                    };
                     let draft = self.drafts.entry(channel.id.clone()).or_default();
                     let edit = egui::TextEdit::multiline(draft)
+                        .layouter(&mut layouter)
                         .id_salt(("composer",&channel.id))
                         .return_key(egui::KeyboardShortcut::new(egui::Modifiers::SHIFT,egui::Key::Enter))
                         .hint_text(format!("Message #{}", channel.label()))
@@ -2091,6 +2170,20 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
             }) {
                 self.pending = Some((channel.id.clone(), content));
             }
+        }
+    }
+    /// Sends a GIF link as its own message (Discord shows it as the playing GIF), keeping the draft.
+    fn send_gif(&mut self, channel: &Channel, url: String) {
+        let reference = self.reply.as_ref().filter(|m| m.channel_id == channel.id).map(|m| m.id.clone());
+        if self.preview {
+            let id = format!("local-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos());
+            merge_message(&mut self.messages, Message { id, channel_id: channel.id.clone(), author: self.user.clone().unwrap_or_default(), content: url, timestamp: "Now".into(), ..Default::default() });
+            self.reply = None;
+            return;
+        }
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis().to_string();
+        if self.send_command(Command::Send { channel: channel.id.clone(), content: url.clone(), file: None, nonce, reference }) {
+            self.pending = Some((channel.id.clone(), url));
         }
     }
     fn dialogs(&mut self, ctx: &egui::Context) {
@@ -2217,11 +2310,20 @@ impl eframe::App for Eclipse {
         if self.home!=Home::Chat||self.settings||self.server_settings||self.channel.as_ref().is_none_or(|c|c.id!=self.picker.channel)||self.calls.active()&&!self.calls.chat{self.picker.close();}
         let (picked, command) = self.picker.show(ctx, &mut self.images);
         if let Some((channel, text)) = picked {
-            let draft = self.drafts.entry(channel).or_default();
-            if !draft.is_empty() {
-                draft.push(' ');
+            // A picked GIF is sent straight away as its own message, like Discord. Emoji (and a GIF
+            // picked while another send or an attachment is waiting) go into the message box.
+            let gif = text.starts_with("https://");
+            let target = self.channels.iter().chain(self.dms.iter()).find(|c| c.id == channel).cloned()
+                .filter(|_| gif && self.pending.is_none() && !self.files.contains_key(&channel));
+            if let Some(target) = target {
+                self.send_gif(&target, text);
+            } else {
+                let draft = self.drafts.entry(channel).or_default();
+                if !draft.is_empty() {
+                    draft.push(' ');
+                }
+                draft.push_str(&text);
             }
-            draft.push_str(&text);
         }
         if let Some(command) = command {
             if self.preview {
@@ -2598,8 +2700,21 @@ mod interaction_tests {
         composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Key{key:egui::Key::Enter,physical_key:None,pressed:false,repeat:false,modifiers:Default::default()}]);
         composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Text("hi".into()),enter]);
         let sent=app.messages.back().unwrap();assert_eq!(sent.content,format!("<@{}> hi",jordan.id));
-        assert_eq!(app.readable(sent,&sent.content),"@Joanne hi");
+        assert_eq!(crate::message_media::strip_marks(&app.readable(sent,&sent.content)),"@Joanne hi");
         assert!(app.suggestions(&channel,"ev").iter().any(|s|s.label=="@everyone"));
+    }
+    #[test]fn clicking_a_suggested_member_inserts_the_mention(){
+        let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);let channel=app.channel.clone().unwrap();
+        let mut member=app.server.members.values().next().expect("sample member").clone();member.user.id="4242".into();member.user.username="joanne".into();member.nick=Some("Joanne".into());app.server.members.insert("4242".into(),member);
+        let out=composer_frame(&ctx,&mut app,&channel,vec![]);
+        let point=out.shapes.iter().find_map(|s|match &s.shape{egui::Shape::Text(t)if t.galley.job.text.starts_with("Message #")=>Some(t.visual_bounding_rect().center()),_=>None}).expect("composer hint");
+        for pressed in [true,false]{composer_frame(&ctx,&mut app,&channel,vec![egui::Event::PointerMoved(point),egui::Event::PointerButton{pos:point,button:egui::PointerButton::Primary,pressed,modifiers:Default::default()}]);}
+        composer_frame(&ctx,&mut app,&channel,vec![egui::Event::Text("@jo".into())]);
+        let out=composer_frame(&ctx,&mut app,&channel,vec![]);
+        let row=out.shapes.iter().find_map(|s|match &s.shape{egui::Shape::Text(t)if t.galley.job.text=="Joanne"=>Some(t.visual_bounding_rect().center()),_=>None}).expect("suggestion row");
+        composer_frame(&ctx,&mut app,&channel,vec![egui::Event::PointerMoved(row)]);
+        for pressed in [true,false]{composer_frame(&ctx,&mut app,&channel,vec![egui::Event::PointerButton{pos:row,button:egui::PointerButton::Primary,pressed,modifiers:Default::default()}]);}
+        assert_eq!(app.drafts[&channel.id],"@joanne ","clicking a member fills in the mention");
     }
     #[test]fn composer_enter_sends_shift_enter_inserts_newline_and_unfocused_enter_does_nothing(){
         let ctx=egui::Context::default();let mut app=Eclipse::with_context(&ctx,true,None);let channel=app.channel.clone().unwrap();let before=app.messages.len();

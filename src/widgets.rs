@@ -110,7 +110,7 @@ pub fn fonts_with_emoji(ctx: &egui::Context,extra_emoji:bool) {
         (16, include_bytes!("../assets/fonts/Kalam.ttf").as_slice()),
     ] {
         let name=format!("discord-name-{id}");
-        fonts.font_data.insert(name.clone(),egui::FontData::from_owned(bytes.to_vec()).into());
+        fonts.font_data.insert(name.clone(),egui::FontData::from_static(bytes).into());
         let mut fallback=vec![name.clone()];fallback.extend(fonts.families[&egui::FontFamily::Proportional].clone());
         fonts.families.insert(egui::FontFamily::Name(name.into()),fallback);
     }
@@ -120,10 +120,10 @@ pub fn fonts_with_emoji(ctx: &egui::Context,extra_emoji:bool) {
         ("Segoe Symbols", "seguisym.ttf"),
         ("Segoe Historic", "seguihis.ttf"),
     ] {
-        if let Ok(bytes) = std::fs::read(std::path::Path::new("C:/Windows/Fonts").join(file)) {
+        if let Some(bytes) = system_font(file) {
             fonts
                 .font_data
-                .insert(name.into(), egui::FontData::from_owned(bytes).into());
+                .insert(name.into(), egui::FontData::from_static(bytes).into());
             for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
                 if name=="Segoe UI" && family==egui::FontFamily::Proportional {
                     fonts.families.entry(family).or_default().insert(0,name.into());
@@ -131,15 +131,15 @@ pub fn fonts_with_emoji(ctx: &egui::Context,extra_emoji:bool) {
             }
         }
     }
-    if extra_emoji {if let Ok(bytes)=std::fs::read("C:/Windows/Fonts/seguiemj.ttf") {
-        fonts.font_data.insert("Segoe Emoji".into(),egui::FontData::from_owned(bytes).into());
+    if extra_emoji {if let Some(bytes)=system_font("seguiemj.ttf") {
+        fonts.font_data.insert("Segoe Emoji".into(),egui::FontData::from_static(bytes).into());
         fonts.families.entry(egui::FontFamily::Proportional).or_default().push("Segoe Emoji".into());
     }}
     for file in ["msjhl.ttc", "msjh.ttc", "msgothic.ttc", "malgun.ttf"] {
-        if let Ok(bytes) = std::fs::read(std::path::Path::new("C:/Windows/Fonts").join(file)) {
+        if let Some(bytes) = system_font(file) {
             fonts.font_data.insert(
                 "Windows CJK".into(),
-                egui::FontData::from_owned(bytes).into(),
+                egui::FontData::from_static(bytes).into(),
             );
             fonts
                 .families
@@ -273,4 +273,19 @@ mod tests {
             assert!(clicked, "click at {}% was lost", fraction * 100.0);
         }
     }
+}
+/// A Windows font file mapped read-only from C:\Windows\Fonts instead of copied into the heap:
+/// Windows loads only the pages egui actually reads and can share them with other programs.
+/// Each file is mapped once for the life of the process, so rebuilding fonts does not grow memory.
+fn system_font(file: &str) -> Option<&'static [u8]> {
+    use std::{collections::HashMap, sync::{Mutex, OnceLock}};
+    static MAPS: OnceLock<Mutex<HashMap<String, &'static [u8]>>> = OnceLock::new();
+    let mut maps = MAPS.get_or_init(Default::default).lock().ok()?;
+    if let Some(bytes) = maps.get(file) { return Some(bytes); }
+    let handle = std::fs::File::open(std::path::Path::new("C:/Windows/Fonts").join(file)).ok()?;
+    // Safety: system font files are not modified while Windows has them installed and in use.
+    let map = unsafe { memmap2::Mmap::map(&handle) }.ok()?;
+    let bytes: &'static [u8] = Box::leak(Box::new(map));
+    maps.insert(file.to_owned(), bytes);
+    Some(bytes)
 }

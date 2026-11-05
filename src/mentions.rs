@@ -9,12 +9,27 @@ pub(in crate::ui) struct Suggestion { pub label: String, pub detail: String, pub
 
 impl Eclipse {
     /// Message text with mentions turned into @names, #channels and @roles.
+    /// Each mention is wrapped in MENTION_START/END so the message body can highlight it; use
+    /// `strip_marks` where plain text is needed.
     pub(in crate::ui) fn readable(&self, message: &Message, text: &str) -> String {
-        replace_mentions(text, |kind, id| match kind {
-            '&' => self.server.roles.iter().find(|r| r.id == id).map(|r| format!("@{}", r.name)),
-            '#' => self.channels.iter().chain(self.dms.iter()).find(|c| c.id == id).map(|c| format!("#{}", c.name.clone().unwrap_or_else(|| c.label()))),
-            _ => self.mention_name(message, id).map(|name| format!("@{name}")),
-        })
+        use crate::message_media::{MENTION_END as E, MENTION_START as S};
+        let resolved = replace_mentions(text, |kind, id| Some(match kind {
+            '&' => self.server.roles.iter().find(|r| r.id == id).map(|r| format!("@{}", r.name)).unwrap_or_else(|| "@unknown-role".into()),
+            '#' => self.channels.iter().chain(self.dms.iter()).find(|c| c.id == id).map(|c| format!("#{}", c.name.clone().unwrap_or_else(|| c.label()))).unwrap_or_else(|| "#unknown".into()),
+            _ => self.mention_name(message, id).map(|name| format!("@{name}")).unwrap_or_else(|| "@unknown-user".into()),
+        }).map(|name| format!("{S}{name}{E}")));
+        // @everyone and @here are typed as plain words; highlight them when they notify.
+        if message.mention_everyone {
+            let mut out = String::with_capacity(resolved.len());
+            let mut last = 0;
+            for range in crate::message_media::mention_ranges(&resolved, &[]) {
+                if resolved[..range.start].ends_with(S) { continue; }
+                out.push_str(&resolved[last..range.start]); out.push(S); out.push_str(&resolved[range.clone()]); out.push(E); last = range.end;
+            }
+            out.push_str(&resolved[last..]);
+            return out;
+        }
+        resolved
     }
     fn mention_name(&self, message: &Message, id: &str) -> Option<String> {
         if let Some(member) = self.server.members.get(id).filter(|_| self.guild.as_deref() == Some(self.server.id.as_str())) { return Some(member.name().to_owned()); }
@@ -65,7 +80,11 @@ impl Eclipse {
     /// The @ suggestion list above the message box while an @word is being typed.
     pub(in crate::ui) fn mention_popup(&mut self, ctx: &egui::Context, channel: &Channel, response: &egui::Response, (step, choose): (i32, bool)) {
         self.mention_open = false;
-        if !response.has_focus() { return; }
+        // Pressing a row takes focus from the message box before the click lands, so keep the list
+        // alive while the pointer is over where it was drawn last frame.
+        let popup_rect = egui::Id::new("mention-popup-rect");
+        let over_popup = ctx.data(|d| d.get_temp::<egui::Rect>(popup_rect)).is_some_and(|r| ctx.pointer_latest_pos().is_some_and(|p| r.contains(p)));
+        if !response.has_focus() && !over_popup { ctx.data_mut(|d| d.remove::<egui::Rect>(popup_rect)); return; }
         let draft = self.drafts.get(&channel.id).cloned().unwrap_or_default();
         let cursor = egui::text_edit::TextEditState::load(ctx, response.id).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index).unwrap_or_else(|| draft.chars().count());
         let Some((start, query)) = mention_token(&draft, cursor) else { self.mention_pick = 0; return };
@@ -82,7 +101,7 @@ impl Eclipse {
         let row = 40.0;
         // Anchored by its bottom edge so it always sits just above the message box.
         let at = egui::pos2(response.rect.left() - 8.0, response.rect.top() - 20.0);
-        egui::Area::new(egui::Id::new("mention-popup")).order(egui::Order::Foreground).pivot(egui::Align2::LEFT_BOTTOM).fixed_pos(at).show(ctx, |ui| {
+        let area = egui::Area::new(egui::Id::new("mention-popup")).order(egui::Order::Foreground).pivot(egui::Align2::LEFT_BOTTOM).fixed_pos(at).show(ctx, |ui| {
             egui::Frame::NONE.fill(Color32::from_gray(30)).stroke(Stroke::new(1.0_f32, BORDER)).corner_radius(8).inner_margin(6).show(ui, |ui| {
                 ui.set_width(response.rect.width().max(320.0));
                 ui.label(RichText::new("MEMBERS").size(11.0).strong().color(MUTED));
@@ -105,7 +124,9 @@ impl Eclipse {
                 }
             });
         });
+        ctx.data_mut(|d| d.insert_temp(popup_rect, area.response.rect));
         let Some(item) = picked.and_then(|i| items.get(i).cloned()) else { return };
+        ctx.data_mut(|d| d.remove::<egui::Rect>(popup_rect));
         // Members go in as @username (sent as <@id>); @everyone and @here are sent as typed.
         let inserted = match (&item.user, &item.id) { (Some(user), Some(id)) => { let label = format!("@{}", user.username); self.mention_ids.insert(label.clone(), id.clone()); label }, _ => item.label.clone() };
         let chars: Vec<char> = draft.chars().collect();
