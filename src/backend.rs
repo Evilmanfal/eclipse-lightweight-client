@@ -102,7 +102,7 @@ pub enum Command {
 #[derive(Debug)]
 pub enum Event {
     Data(String, Result<Value,String>),
-    Account(String,Value),
+    Account(String,Arc<Value>),
     Connected(User, Vec<Guild>, Vec<Channel>),
     Channels(String, Vec<Channel>),
     History(String, Vec<Message>, bool),
@@ -120,7 +120,7 @@ pub enum Event {
     Folders(crate::folders::Layout),
     FolderStatus(String),
     ProfilePatch(String, Value),
-    Presence(Value),
+    Presence(Arc<Value>),
     Signal(String, Value),
     Emojis(String, Vec<crate::media_picker::CustomEmoji>),
     Gifs(String, Vec<crate::media_picker::Gif>),
@@ -210,25 +210,31 @@ pub fn start(token: String, ctx: egui::Context) -> Backend {
                 }
             }
         });
-        // Message history has its own lane so opening a conversation never waits behind profile,
-        // member, settings or other requests on this queue. Several fetches run at once and the
-        // newest request goes first, so the channel you click overtakes background prefetches.
-        let history = HistoryLane::default();
-        for _ in 0..HISTORY_WORKERS {
-            let (lane, token, cancel, events, ctx) = (history.clone(), token.clone(), cancel_worker.clone(), events.clone(), ctx.clone());
-            thread::spawn(move || {
-                let Ok(mut api) = Api::new(token, cancel.clone()) else { return };
-                while let Some(command) = lane.next(&cancel) {
-                    let event = api.command(command).unwrap_or_else(Event::Error);
-                    if !emit(&events, &ctx, event) { break; }
-                }
-            });
+        // Read-only work leaves this queue for lanes of its own, so opening a conversation or a
+        // server never waits behind profile, member or settings requests, and those no longer
+        // wait behind each other. Each lane runs several requests at once, newest first, so what
+        // you just clicked overtakes background prefetches. Writes (sending, editing, saving)
+        // stay here, one at a time and in order.
+        // Only stale history prefetches may be dropped; every read request is eventually answered.
+        let lanes = [Lane::new(interactive_command, LANE_QUEUE), Lane::new(read_command, usize::MAX)];
+        for lane in &lanes {
+            for _ in 0..LANE_WORKERS {
+                let Ok(mut lane_api) = api.sibling() else { continue };
+                let (lane, cancel, events, ctx) = (lane.clone(), cancel_worker.clone(), events.clone(), ctx.clone());
+                thread::spawn(move || {
+                    let api = &mut lane_api;
+                    while let Some(command) = lane.next(&cancel) {
+                        let event = api.command(command).unwrap_or_else(Event::Error);
+                        if !emit(&events, &ctx, event) { break; }
+                    }
+                });
+            }
         }
         let mut queued=VecDeque::new();
         while !cancel_worker.load(Ordering::Relaxed) {
             if queued.is_empty(){match commands.recv_timeout(Duration::from_millis(400)){Ok(c)=>queued.push_back(c),Err(crossbeam_channel::RecvTimeoutError::Timeout)=>continue,Err(_)=>break}}
             queued.extend(commands.try_iter().take(64usize.saturating_sub(queued.len())));
-            queued=queued.into_iter().filter_map(|command|history.offer(command)).collect();
+            queued=queued.into_iter().filter_map(|command|lanes.iter().try_fold(command,|command,lane|lane.offer(command))).collect();
             if queued.is_empty(){continue;}
             let now=Instant::now();
             let index=queued.iter().enumerate().filter(|(_,c)|command_ready(&api.limits,c).is_none_or(|ready|ready<=now)).min_by_key(|(i,c)|(command_priority(c),*i)).map(|(i,_)|i);
@@ -282,28 +288,34 @@ impl Limits{
     }
     fn delay(&mut self,method:&Method,route:&str,seconds:f64,global:bool){let until=Instant::now()+Duration::from_secs_f64(seconds.clamp(0.,3600.)+0.1);if global{self.global=Some(self.global.unwrap_or(until).max(until));}else{let key=self.key(method,route);self.deadlines.entry(key).and_modify(|old|*old=(*old).max(until)).or_insert(until);}}
 }
-/// Threads fetching message history at once. Each channel has its own Discord rate-limit bucket.
-const HISTORY_WORKERS: usize = 3;
-/// Waiting history requests, newest last. Older prefetches beyond this are dropped.
-const HISTORY_QUEUE: usize = 40;
-#[derive(Clone, Default)]
-struct HistoryLane(Arc<(Mutex<VecDeque<Command>>, Condvar)>);
-impl HistoryLane {
-    /// Takes History and Around commands (returns None); everything else is handed back.
+/// Threads per lane. Discord rate-limits per route and channel, so these rarely collide.
+const LANE_WORKERS: usize = 3;
+/// Waiting requests per lane, newest last. Older prefetches beyond this are dropped.
+const LANE_QUEUE: usize = 40;
+/// Message history and channel lists: what opening a conversation or server waits on.
+fn interactive_command(command: &Command) -> bool { matches!(command, Command::History(..) | Command::Around(..) | Command::Channels(..)) }
+/// Read-only API requests: profiles, members, roles, settings and the like.
+fn read_command(command: &Command) -> bool { matches!(command, Command::Request { method, .. } if *method == Method::GET) }
+/// A queue of read-only commands shared by a few worker threads.
+#[derive(Clone)]
+struct Lane { shared: Arc<(Mutex<VecDeque<Command>>, Condvar)>, takes: fn(&Command) -> bool, limit: usize }
+impl Lane {
+    fn new(takes: fn(&Command) -> bool, limit: usize) -> Self { Self { shared: Default::default(), takes, limit } }
+    /// Takes a command this lane handles (returns None); anything else is handed back.
     fn offer(&self, command: Command) -> Option<Command> {
-        if !matches!(command, Command::History(..) | Command::Around(..)) { return Some(command); }
-        let (queue, ready) = &*self.0;
+        if !(self.takes)(&command) { return Some(command); }
+        let (queue, ready) = &*self.shared;
         let Ok(mut queue) = queue.lock() else { return None };
-        // A newer request for the same page replaces the waiting one, so it moves to the front.
-        queue.retain(|waiting| !same_page(waiting, &command));
+        // A newer request for the same thing replaces the waiting one, so it moves to the front.
+        queue.retain(|waiting| !same_request(waiting, &command));
         queue.push_back(command);
-        while queue.len() > HISTORY_QUEUE { queue.pop_front(); }
+        while queue.len() > self.limit { queue.pop_front(); }
         ready.notify_one();
         None
     }
     /// The newest waiting request, or None once the client disconnects.
     fn next(&self, cancel: &AtomicBool) -> Option<Command> {
-        let (queue, ready) = &*self.0;
+        let (queue, ready) = &*self.shared;
         let mut queue = queue.lock().ok()?;
         loop {
             if cancel.load(Ordering::Relaxed) { return None; }
@@ -312,8 +324,14 @@ impl HistoryLane {
         }
     }
 }
-fn same_page(a: &Command, b: &Command) -> bool {
-    match (a, b) { (Command::History(x, before_x), Command::History(y, before_y)) => x == y && before_x == before_y, (Command::Around(x, at_x), Command::Around(y, at_y)) => x == y && at_x == at_y, _ => false }
+fn same_request(a: &Command, b: &Command) -> bool {
+    match (a, b) {
+        (Command::History(x, before_x), Command::History(y, before_y)) => x == y && before_x == before_y,
+        (Command::Around(x, at_x), Command::Around(y, at_y)) => x == y && at_x == at_y,
+        (Command::Channels(x), Command::Channels(y)) => x == y,
+        (Command::Request { key: x, route: route_x, .. }, Command::Request { key: y, route: route_y, .. }) => x == y && route_x == route_y,
+        _ => false,
+    }
 }
 fn command_priority(command:&Command)->u8{match command{Command::History(..)|Command::Around(..)|Command::Channels(..)=>1,Command::Request{method,..}if *method==Method::GET=>2,_=>0}}
 fn command_ready(limits:&Limits,command:&Command)->Option<Instant>{match command{Command::History(id,_)|Command::Around(id,_)=>Some(limits.until(&Method::GET,&format!("/channels/{id}/messages"))),Command::Channels(id)=>Some(limits.until(&Method::GET,&format!("/guilds/{id}/channels"))),Command::Request{method,route,..}=>Some(limits.until(method,route)),_=>limits.global}}
@@ -493,7 +511,23 @@ impl Api {
         crate::folders::legacy(&value).ok_or_else(|| "No server folder settings returned.".into())
     }
     fn bootstrap(&mut self) -> Result<(User, Vec<Guild>, Vec<Channel>), String> {
-        let user = self.request(Method::GET, "/users/@me", None, None)?;
+        // The three startup requests don't depend on each other, so they run at once.
+        let (mut servers, mut direct) = (self.sibling()?, self.sibling()?);
+        thread::scope(|scope| {
+            let guilds = scope.spawn(move || servers.guild_list());
+            let dms = scope.spawn(move || direct.request::<Vec<Channel>>(Method::GET, "/users/@me/channels", None, None));
+            let user = self.request(Method::GET, "/users/@me", None, None)?;
+            let guilds = guilds.join().map_err(|_| "Could not load servers.".to_owned())??;
+            let dms = dms.join().map_err(|_| "Could not load direct messages.".to_owned())??;
+            Ok((user, guilds, dms))
+        })
+    }
+    /// Another handle for requests made in parallel. It shares this one's HTTP client, so
+    /// every lane draws on one pool of warm connections; rate limits are tracked per handle.
+    fn sibling(&self) -> Result<Api, String> {
+        Ok(Api { client: self.client.clone(), token: self.token.clone(), cancel: self.cancel.clone(), limits: Limits::default(), base: self.base.clone() })
+    }
+    fn guild_list(&mut self) -> Result<Vec<Guild>, String> {
         let mut guilds = Vec::new();
         let mut after = String::new();
         loop {
@@ -513,8 +547,7 @@ impl Api {
                 break;
             }
         }
-        let dms = self.request(Method::GET, "/users/@me/channels", None, None)?;
-        Ok((user, guilds, dms))
+        Ok(guilds)
     }
     fn command(&mut self, command: Command) -> Result<Event, String> {
         Ok(match command {
@@ -700,6 +733,68 @@ fn ready_folders(data: &Value) -> Option<crate::folders::Layout> {
         .or_else(|| crate::folders::legacy(&data["user_settings"]))
 }
 
+/// Discord's zlib-stream transport compression: one inflate context lives for the whole
+/// connection, and a message is complete when its data ends with the 00 00 FF FF flush marker.
+#[derive(Default)]
+struct ZlibStream { inflate: Option<flate2::Decompress>, pending: Vec<u8>, out: Vec<u8> }
+impl ZlibStream {
+    /// Largest compressed message accepted before the connection is dropped.
+    const LIMIT: usize = 64 * 1024 * 1024;
+    /// Feeds one binary frame. Returns the decoded message once it is complete.
+    fn push(&mut self, data: &[u8]) -> Option<Result<String, ()>> {
+        self.pending.extend_from_slice(data);
+        if self.pending.len() > Self::LIMIT { return Some(Err(())); }
+        if !self.pending.ends_with(&[0, 0, 0xff, 0xff]) { return None; }
+        let inflate = self.inflate.get_or_insert_with(|| flate2::Decompress::new(true));
+        self.out.clear();
+        let mut input = &self.pending[..];
+        loop {
+            if self.out.len() == self.out.capacity() { self.out.reserve(input.len().max(16 * 1024) * 4); }
+            let (read, written) = (inflate.total_in(), inflate.total_out());
+            if inflate.decompress_vec(input, &mut self.out, flate2::FlushDecompress::Sync).is_err() { return Some(Err(())); }
+            input = &input[(inflate.total_in() - read) as usize..];
+            let progressed = inflate.total_in() != read || inflate.total_out() != written;
+            if (input.is_empty() && self.out.len() < self.out.capacity()) || !progressed { break; }
+            if self.out.len() > 16 * Self::LIMIT { return Some(Err(())); }
+        }
+        self.pending.clear();
+        // A large READY shouldn't keep its buffers for the rest of the session.
+        if self.pending.capacity() > 1 << 20 { self.pending.shrink_to(64 * 1024); }
+        Some(String::from_utf8(std::mem::take(&mut self.out)).map_err(|_| ()))
+    }
+}
+/// The outer fields of a gateway frame. `d` stays raw JSON text until it is needed.
+#[derive(serde::Deserialize)]
+struct Envelope<'a> {
+    op: Option<u64>,
+    s: Option<i64>,
+    #[serde(borrow)]
+    t: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow)]
+    d: Option<&'a serde_json::value::RawValue>,
+}
+/// Dispatches the account, server, voice and member state reads (`Event::Account`).
+const ACCOUNT_DISPATCHES: &[&str] = &["READY","READY_SUPPLEMENTAL","GUILD_CREATE","GUILD_UPDATE","GUILD_MEMBER_ADD","GUILD_MEMBER_UPDATE","GUILD_MEMBER_REMOVE","GUILD_MEMBERS_CHUNK","GUILD_MEMBER_LIST_UPDATE","GUILD_ROLE_CREATE","GUILD_ROLE_UPDATE","GUILD_ROLE_DELETE","RELATIONSHIP_ADD","RELATIONSHIP_UPDATE","RELATIONSHIP_REMOVE","USER_SETTINGS_UPDATE","MESSAGE_ACK","GUILD_EMOJIS_UPDATE","CHANNEL_CREATE","CHANNEL_UPDATE","CHANNEL_DELETE","GUILD_DELETE"];
+/// Whether a dispatch is used at all; everything else (typing, pins, sessions, ...) is skipped
+/// before its payload is parsed.
+fn handled_dispatch(kind: &str) -> bool {
+    ACCOUNT_DISPATCHES.contains(&kind) || matches!(kind, "PRESENCE_UPDATE" | "VOICE_STATE_UPDATE" | "VOICE_SERVER_UPDATE" | "STREAM_CREATE" | "STREAM_SERVER_UPDATE" | "STREAM_DELETE" | "CALL_CREATE" | "CALL_UPDATE" | "CALL_DELETE" | "MESSAGE_UPDATE" | "MESSAGE_DELETE" | "MESSAGE_DELETE_BULK" | "MESSAGE_REACTION_ADD" | "MESSAGE_REACTION_REMOVE" | "MESSAGE_REACTION_REMOVE_ALL" | "USER_SETTINGS_PROTO_UPDATE" | "USER_UPDATE")
+}
+/// Drops the parts of READY and GUILD_CREATE that nothing in Eclipse reads. On a large
+/// account these (experiments especially) are a big share of a multi-megabyte payload.
+fn trim_startup(kind: &str, data: &mut Value) {
+    const GUILD_UNUSED: &[&str] = &["stickers", "guild_scheduled_events", "soundboard_sounds", "stage_instances", "embedded_activities", "activity_instances", "application_command_counts", "threads"];
+    let trim_guild = |guild: &mut Value| if let Some(guild) = guild.as_object_mut() { for key in GUILD_UNUSED { guild.remove(*key); } };
+    match kind {
+        "READY" => {
+            if let Some(ready) = data.as_object_mut() {
+                for key in ["experiments", "guild_experiments", "connected_accounts", "sessions", "notes", "tutorial", "consents", "geo_ordered_rtc_regions", "read_state", "user_guild_settings", "merged_members", "lazy_private_channels", "private_channels", "analytics_token", "auth_token", "auth_session_id_hash", "friend_suggestion_count", "country_code", "api_code_version"] { ready.remove(key); }
+            }
+            if let Some(guilds) = data["guilds"].as_array_mut() { guilds.iter_mut().for_each(trim_guild); }
+        }
+        _ => trim_guild(data),
+    }
+}
 fn gateway(
     token: Arc<Zeroizing<String>>,
     cancel: Arc<AtomicBool>,
@@ -727,7 +822,9 @@ fn gateway(
                     .map_err(|_| "Invalid Gateway address")?;
             url.query_pairs_mut()
                 .append_pair("v", "10")
-                .append_pair("encoding", "json");
+                .append_pair("encoding", "json")
+                // The whole session is compressed; READY shrinks to a fraction of its size.
+                .append_pair("compress", "zlib-stream");
             let (mut socket, _) =
                 connect(url.as_str()).map_err(|_| "Live connection unavailable".to_owned())?;
             match socket.get_mut() {
@@ -746,6 +843,8 @@ fn gateway(
             let mut acknowledged = true;
             let mut live = false;
             let mut sent_commands = std::collections::VecDeque::<Instant>::new();
+            // zlib-stream keeps one inflate context for the whole connection.
+            let mut inflate = ZlibStream::default();
             while !cancel.load(Ordering::Relaxed) {
                 while sent_commands
                     .front()
@@ -799,19 +898,30 @@ fn gateway(
                     }
                     return Err("Server closed connection".into());
                 }
-                let WsMessage::Text(text) = frame else {
+                let inflated;
+                let text: &str = match &frame {
+                    WsMessage::Text(text) => text.as_str(),
+                    WsMessage::Binary(bytes) => match inflate.push(bytes) {
+                        None => continue,
+                        Some(Ok(text)) => { inflated = text; &inflated }
+                        Some(Err(())) => return Err("Live update decompression failed".into()),
+                    },
+                    _ => continue,
+                };
+                // Only the envelope is parsed up front; the payload stays raw text until we
+                // know the event is one Eclipse uses, so ignored events cost no allocation.
+                let Ok(envelope) = serde_json::from_str::<Envelope>(&text) else {
                     continue;
                 };
-                let Ok(value) = serde_json::from_str::<Value>(&text) else {
-                    continue;
-                };
-                if let Some(s) = value["s"].as_i64() {
+                if let Some(s) = envelope.s {
                     seq = Some(s);
                 }
-                match value["op"].as_u64() {
+                let raw = envelope.d.map(|d| d.get()).unwrap_or("null");
+                match envelope.op {
                     Some(10) => {
+                        let hello: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
                         interval = Duration::from_millis(
-                            value["d"]["heartbeat_interval"]
+                            hello["heartbeat_interval"]
                                 .as_u64()
                                 .unwrap_or(40000)
                                 .clamp(1000, 120000),
@@ -836,7 +946,7 @@ fn gateway(
                     }
                     Some(7) => return Err("Discord requested reconnect".into()),
                     Some(9) => {
-                        if value["d"].as_bool() != Some(true) {
+                        if raw.trim() != "true" {
                             session = None;
                             seq = None;
                             resume_url = None;
@@ -844,16 +954,39 @@ fn gateway(
                         return Err("Session expired".into());
                     }
                     Some(0) => {
-                        let data = &value["d"];
-                        let kind=value["t"].as_str().unwrap_or_default();
-                        if matches!(kind,"READY"|"READY_SUPPLEMENTAL"|"GUILD_CREATE"|"GUILD_UPDATE"|"GUILD_MEMBER_ADD"|"GUILD_MEMBER_UPDATE"|"GUILD_MEMBER_REMOVE"|"GUILD_MEMBERS_CHUNK"|"GUILD_MEMBER_LIST_UPDATE"|"GUILD_ROLE_CREATE"|"GUILD_ROLE_UPDATE"|"GUILD_ROLE_DELETE"|"RELATIONSHIP_ADD"|"RELATIONSHIP_UPDATE"|"RELATIONSHIP_REMOVE"|"USER_SETTINGS_UPDATE"|"MESSAGE_ACK"|"QUESTS_USER_STATUS_UPDATE"|"GUILD_EMOJIS_UPDATE"|"CHANNEL_CREATE"|"CHANNEL_UPDATE"|"CHANNEL_DELETE"|"GUILD_DELETE") {
-                            if !emit(&tx,&ctx,Event::Account(kind.into(),data.clone())){return Ok(());}
+                        let kind = envelope.t.as_deref().unwrap_or_default();
+                        if kind == "RESUMED" {
+                            live = true;
+                            failures = 0;
+                            if !emit(&tx, &ctx, Event::Gateway("Live".into())) { return Ok(()); }
+                            continue;
                         }
-                        let event = match value["t"].as_str().unwrap_or("") {
+                        // New messages go straight into Eclipse's message type.
+                        if kind == "MESSAGE_CREATE" {
+                            if let Ok(message) = serde_json::from_str::<Message>(raw) {
+                                if !emit(&tx, &ctx, Event::Message(message)) { return Ok(()); }
+                            }
+                            continue;
+                        }
+                        if !handled_dispatch(kind) {
+                            continue;
+                        }
+                        let Ok(mut data) = serde_json::from_str::<Value>(raw) else {
+                            continue;
+                        };
+                        if matches!(kind, "READY" | "GUILD_CREATE") {
+                            trim_startup(kind, &mut data);
+                        }
+                        // One shared copy feeds every consumer instead of a clone per event.
+                        let data = Arc::new(data);
+                        if ACCOUNT_DISPATCHES.contains(&kind) && !emit(&tx, &ctx, Event::Account(kind.into(), data.clone())) {
+                            return Ok(());
+                        }
+                        let event = match kind {
                             "READY" => {
                                 live = true;
                                 emit(&tx, &ctx, Event::Presence(data.clone()));
-                                if let Some(layout) = ready_folders(data) {
+                                if let Some(layout) = ready_folders(&data) {
                                     if !emit(&tx, &ctx, Event::Folders(layout)) {
                                         return Ok(());
                                     }
@@ -872,16 +1005,11 @@ fn gateway(
                                 failures = 0;
                                 Some(Event::Gateway("Live".into()))
                             }
-                            "RESUMED" => {
-                                live = true;
-                                failures = 0;
-                                Some(Event::Gateway("Live".into()))
-                            }
                             "PRESENCE_UPDATE"
                             | "READY_SUPPLEMENTAL"
                             | "GUILD_CREATE"
                             | "GUILD_MEMBERS_CHUNK"
-                            | "GUILD_MEMBER_LIST_UPDATE" => Some(Event::Presence(data.clone())),
+                            | "GUILD_MEMBER_LIST_UPDATE" => Some(Event::Presence(data)),
                             "VOICE_STATE_UPDATE"
                             | "VOICE_SERVER_UPDATE"
                             | "STREAM_CREATE"
@@ -889,33 +1017,27 @@ fn gateway(
                             | "STREAM_DELETE"
                             | "CALL_CREATE"
                             | "CALL_UPDATE"
-                            | "CALL_DELETE" => Some(Event::Signal(
-                                value["t"].as_str().unwrap_or_default().into(),
-                                data.clone(),
-                            )),
-                            "MESSAGE_CREATE" => serde_json::from_value(data.clone())
-                                .ok()
-                                .map(Event::Message),
+                            | "CALL_DELETE" => Some(Event::Signal(kind.into(), Arc::unwrap_or_clone(data))),
                             "MESSAGE_UPDATE"
                             | "MESSAGE_DELETE_BULK"
                             | "MESSAGE_REACTION_ADD"
                             | "MESSAGE_REACTION_REMOVE"
                             | "MESSAGE_REACTION_REMOVE_ALL" => {
-                                Some(Event::Patch(json!({"type":value["t"], "data":data})))
+                                Some(Event::Patch(json!({"type":kind, "data":Arc::unwrap_or_clone(data)})))
                             }
                             "MESSAGE_DELETE" => Some(Event::Deleted(
                                 data["channel_id"].as_str().unwrap_or("").into(),
                                 data["id"].as_str().unwrap_or("").into(),
                             )),
                             "USER_SETTINGS_PROTO_UPDATE" => {
-                                settings_folders(data).map(Event::Folders)
+                                settings_folders(&data).map(Event::Folders)
                             }
                             "USER_SETTINGS_UPDATE" => {
-                                crate::folders::legacy(data).map(Event::Folders)
+                                crate::folders::legacy(&data).map(Event::Folders)
                             }
                             "USER_UPDATE" | "GUILD_UPDATE" => Some(Event::ProfilePatch(
-                                value["t"].as_str().unwrap_or("").into(),
-                                data.clone(),
+                                kind.into(),
+                                Arc::unwrap_or_clone(data),
                             )),
                             _ => None,
                         };
@@ -1120,16 +1242,50 @@ mod tests {
         assert!(ready_folders(&json!({"user_settings_proto":encoded})).is_some());
     }
     #[test]
+    fn zlib_stream_decodes_messages_across_frames_with_one_context() {
+        use std::io::Write;
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut frames = vec![];
+        for text in [r#"{"op":10,"d":{"heartbeat_interval":41250}}"#, r#"{"op":0,"t":"READY","s":1,"d":{"session_id":"abc"}}"#] {
+            encoder.write_all(text.as_bytes()).unwrap();
+            encoder.flush().unwrap();
+            frames.push(std::mem::take(encoder.get_mut()));
+        }
+        let mut stream = ZlibStream::default();
+        let (first, second) = frames[1].split_at(frames[1].len() / 2);
+        assert_eq!(stream.push(&frames[0]), Some(Ok(r#"{"op":10,"d":{"heartbeat_interval":41250}}"#.into())));
+        assert_eq!(stream.push(first), None, "a message split across frames waits for its end marker");
+        assert_eq!(stream.push(second), Some(Ok(r#"{"op":0,"t":"READY","s":1,"d":{"session_id":"abc"}}"#.into())));
+    }
+    #[test]
+    fn gateway_envelope_defers_payloads_and_ready_drops_unused_parts() {
+        let frame = r#"{"op":0,"s":42,"t":"TYPING_START","d":{"channel_id":"1","user_id":"2"}}"#;
+        let envelope: Envelope = serde_json::from_str(frame).unwrap();
+        assert_eq!((envelope.op, envelope.s, envelope.t.as_deref()), (Some(0), Some(42), Some("TYPING_START")));
+        assert!(!handled_dispatch("TYPING_START"), "typing events are skipped unparsed");
+        assert!(handled_dispatch("READY") && handled_dispatch("MESSAGE_UPDATE") && handled_dispatch("VOICE_STATE_UPDATE"));
+        let mut ready = json!({"session_id":"s","experiments":[[1,2,3]],"user_settings":{"status":"idle"},
+            "guilds":[{"id":"9","channels":[{"id":"10"}],"roles":[],"stickers":[{"id":"x"}],"guild_scheduled_events":[]}]});
+        trim_startup("READY", &mut ready);
+        assert!(ready.get("experiments").is_none() && ready["guilds"][0].get("stickers").is_none());
+        assert_eq!(ready["session_id"], "s");
+        assert_eq!(ready["guilds"][0]["channels"][0]["id"], "10", "what Eclipse reads stays");
+        assert_eq!(ready["user_settings"]["status"], "idle");
+    }
+    #[test]
     fn history_lane_serves_the_newest_request_first_without_duplicates() {
-        let lane = HistoryLane::default();
+        let lane = Lane::new(interactive_command, LANE_QUEUE);
         let cancel = AtomicBool::new(false);
         assert!(lane.offer(Command::Refresh).is_some(), "other commands stay on the main queue");
         for id in ["prefetch-a", "prefetch-b", "clicked", "prefetch-a"] { assert!(lane.offer(Command::History(id.into(), None)).is_none()); }
-        let order: Vec<String> = std::iter::from_fn(|| { let empty = lane.0 .0.lock().unwrap().is_empty(); if empty { None } else { lane.next(&cancel) } })
+        let order: Vec<String> = std::iter::from_fn(|| { let empty = lane.shared.0.lock().unwrap().is_empty(); if empty { None } else { lane.next(&cancel) } })
             .map(|c| match c { Command::History(id, _) => id, _ => unreachable!() }).collect();
         assert_eq!(order, ["prefetch-a", "clicked", "prefetch-b"], "a repeated request moves to the front and is fetched once");
-        for i in 0..HISTORY_QUEUE + 5 { lane.offer(Command::History(i.to_string(), None)); }
-        assert_eq!(lane.0 .0.lock().unwrap().len(), HISTORY_QUEUE, "old prefetches are dropped beyond the limit");
+        for i in 0..LANE_QUEUE + 5 { lane.offer(Command::History(i.to_string(), None)); }
+        assert_eq!(lane.shared.0.lock().unwrap().len(), LANE_QUEUE, "old prefetches are dropped beyond the limit");
+        let reads = Lane::new(read_command, LANE_QUEUE);
+        assert!(reads.offer(Command::Request { key: "my-profile".into(), method: Method::GET, route: "/users/1/profile".into(), body: None }).is_none(), "reads leave the main queue");
+        assert!(reads.offer(Command::Request { key: "save".into(), method: Method::PATCH, route: "/users/@me".into(), body: None }).is_some(), "writes stay in order on the main queue");
     }
     #[test]
     fn falls_back_to_legacy_folders_without_writing_settings() {

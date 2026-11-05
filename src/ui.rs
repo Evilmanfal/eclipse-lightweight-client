@@ -524,6 +524,7 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
         self.search.clear();
         self.composer_ime=false;
         self.messages.clear();
+        self.images.release_conversation();
         self.pins = None;
         self.pins_anchor = None;
         self.jump_to = None;

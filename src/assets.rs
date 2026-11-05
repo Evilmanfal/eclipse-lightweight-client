@@ -478,10 +478,8 @@ impl Images {
                         Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
                         Err(_) => break,
                     };
-                    let (source,size)=source_key(&job.key);
-                    let image = if let Some(bytes) = bundled(source) {
-                        decode_sized(bytes,size)
-                    } else if let Some(key) = source.strip_prefix("demo://") {
+                    let (source,_)=source_key(&job.key);
+                    let image = if let Some(key) = source.strip_prefix("demo://") {
                         Ok(demo_asset(key))
                     } else {
                         client
@@ -524,6 +522,12 @@ impl Images {
             generation: 0,
             clock: 0,
         }
+    }
+    /// Leaving a conversation frees its decoded attachments, embeds and GIFs: the largest
+    /// images, and every frame of an animation. Avatars, server icons, emoji, role icons and
+    /// decorations stay, since they are on screen in every conversation.
+    pub fn release_conversation(&mut self) {
+        self.textures.retain(|key, _| kept_across_conversations(key));
     }
     pub fn clear(&mut self) {
         self.generation = self.generation.wrapping_add(1);
@@ -731,14 +735,11 @@ impl Images {
 }
 /// Server icons and user avatars (including Discord's default avatars).
 fn is_icon(key:&str)->bool{let source=source_key(key).0;source.contains("/icons/")||source.contains("/avatars/")||source.contains("/embed/avatars/")}
+fn kept_across_conversations(key:&str)->bool{
+    let source=source_key(key).0;
+    is_icon(key)||source.starts_with("demo://")||["/emojis/","/role-icons/","/avatar-decoration-presets/","/assets/collectibles/","/app-icons/","/guild-tag-badges/","/clan-badges/","/badge-icons/"].iter().any(|path|source.contains(path))
+}
 fn hovered(ctx:&egui::Context,rect:egui::Rect)->bool{ctx.pointer_hover_pos().is_some_and(|p|rect.contains(p))}
-fn bundled(key:&str)->Option<&'static [u8]>{match key{
-    "builtin://discord/nitro-background"=>Some(include_bytes!("../assets/discord/nitro-background.png")),
-    "builtin://discord/nitro-wumpus"=>Some(include_bytes!("../assets/discord/nitro-wumpus.webp")),
-    "builtin://discord/shop-banner"=>Some(include_bytes!("../assets/discord/shop-banner.png")),
-    "builtin://discord/quests-banner"=>Some(include_bytes!("../assets/discord/quests-banner.webp")),
-    _=>None,
-}}
 pub fn animation_check(path:&str)->serde_json::Value {
     let result=std::fs::metadata(path).map_err(|_|()).and_then(|m|if m.len()<=GIF_LIMIT{std::fs::read(path).map_err(|_|())}else{Err(())}).and_then(|bytes|decode(&bytes));
     match result {Ok(image)=>serde_json::json!({"decoded":true,"frames":image.frames.len(),"cycle_ms":image.frames.iter().map(|f|f.delay.as_millis()).sum::<u128>(),"pixel_bytes":image.frames.iter().map(|f|f.image.pixels.len()*4).sum::<usize>(),"first_size":image.frames[0].image.size}),Err(())=>serde_json::json!({"decoded":false})}
@@ -842,6 +843,10 @@ fn demo_image(key: &str, phase: f32, size: usize) -> ColorImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]fn leaving_a_conversation_keeps_avatars_and_emoji_but_frees_chat_media(){
+        for kept in ["https://cdn.discordapp.com/avatars/1/a.png","https://cdn.discordapp.com/icons/2/b.webp","https://cdn.discordapp.com/emojis/3.gif","https://cdn.discordapp.com/role-icons/4/c.png"]{assert!(kept_across_conversations(kept),"{kept}");}
+        for freed in ["https://cdn.discordapp.com/attachments/5/6/photo.png","https://media.discordapp.net/attachments/5/6/clip.gif","https://media.tenor.com/abc/tenor.gif","https://images-ext-1.discordapp.net/external/x/y.png"]{assert!(!kept_across_conversations(freed),"{freed}");}
+    }
     #[test]fn sixty_fps_playback_does_not_retain_the_old_thirty_fps_upload_gate(){
         let data=Decoded::new((0..60).map(|_|Frame{image:ColorImage::new([1,1],vec![egui::Color32::WHITE]),delay:Duration::from_millis(17)}).collect(),false).unwrap();
         let start=Instant::now();let mut playback=Playback::default();playback.advance(start,&data,FRAME_INTERVAL);
