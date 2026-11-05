@@ -25,6 +25,20 @@ pub enum Span<'a> {
     Emoji { label: &'a str, url: String },
     /// A resolved @user, @role, #channel, @everyone or @here, drawn as a highlighted pill.
     Mention(&'a str),
+    /// A masked link, `[label](https://…)`.
+    Link { label: &'a str, url: &'a str },
+}
+/// `[label](url)` at the start of `rest`: the label and the address, and the token's length.
+fn masked_link(rest: &str) -> Option<(&str, &str, usize)> {
+    let inner = rest.strip_prefix('[')?;
+    let close = inner.find("](").filter(|i| *i > 0 && *i <= 200)?;
+    let label = &inner[..close];
+    if label.contains(['[', '\n']) { return None; }
+    let after = &inner[close + 2..];
+    let end = after.find(')').filter(|i| *i <= 2048)?;
+    let url = after[..end].trim_start_matches('<').trim_end_matches('>');
+    ((url.starts_with("https://") || url.starts_with("http://")) && crate::model::safe_link(url) && !url.contains(char::is_whitespace))
+        .then_some((label, url, 1 + close + 2 + end + 1))
 }
 pub fn spans(text: &str) -> Vec<Span<'_>> {
     let mut result = Vec::new();
@@ -37,6 +51,15 @@ pub fn spans(text: &str) -> Vec<Span<'_>> {
                 if plain < offset { result.push(Span::Text(&text[plain..offset])); }
                 result.push(Span::Mention(&rest[MENTION_START.len_utf8()..end]));
                 offset += end + MENTION_END.len_utf8();
+                plain = offset;
+                continue;
+            }
+        }
+        if rest.starts_with('[') {
+            if let Some((label, url, length)) = masked_link(rest) {
+                if plain < offset { result.push(Span::Text(&text[plain..offset])); }
+                result.push(Span::Link { label, url });
+                offset += length;
                 plain = offset;
                 continue;
             }
@@ -150,14 +173,49 @@ pub fn link_in(word:&str)->Option<&str>{
     let link=word.trim_start_matches(['<','(']).trim_end_matches(['>',',',';','.','!','?',':',')','\'','"']);
     ((link.starts_with("https://")||link.starts_with("http://"))&&crate::model::safe_link(link)).then_some(link)
 }
+/// Discord markdown that would otherwise show as raw characters: backslash escapes (`2\.5K`)
+/// lose their backslash and `**` bold markers are dropped.
+pub fn clean_markdown(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains('\\') && !text.contains("**") { return std::borrow::Cow::Borrowed(text); }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if chars.peek().is_some_and(|n| n.is_ascii_punctuation()) => out.extend(chars.next()),
+            '*' if chars.peek() == Some(&'*') => { chars.next(); }
+            _ => out.push(c),
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+/// Splits `word` into pieces no wider than `max`, so a long unbroken word (a link, a run of
+/// characters) wraps inside its line instead of spilling past the edge of the message.
+fn fitting_pieces<'a>(ui: &egui::Ui, word: &'a str, font: &egui::FontId, max: f32) -> Vec<&'a str> {
+    let width = |piece: &str| ui.fonts(|f| f.layout_no_wrap(piece.to_owned(), font.clone(), egui::Color32::WHITE).size().x);
+    if word.chars().count() < 12 || width(word) <= max { return vec![word]; }
+    let mut pieces = vec![];
+    let mut start = 0;
+    let mut fits = 0;
+    for (index, c) in word.char_indices() {
+        let end = index + c.len_utf8();
+        if fits > start && width(&word[start..end]) > max { pieces.push(&word[start..fits]); start = fits; }
+        fits = end;
+    }
+    pieces.push(&word[start..]);
+    pieces
+}
 pub fn body(ui: &mut egui::Ui, images: &mut Images, text: &str) ->Vec<egui::Response> {
+    let text = clean_markdown(text);
+    let text = text.as_ref();
     let spans = spans(text);
-    if !spans.iter().any(|s| matches!(s, Span::Emoji { .. } | Span::Mention(_))) && !text.split_whitespace().any(|w|link_in(w).is_some()) {
+    if !spans.iter().any(|s| matches!(s, Span::Emoji { .. } | Span::Mention(_) | Span::Link { .. })) && !text.split_whitespace().any(|w|link_in(w).is_some()) {
         return vec![ui.add(egui::Label::new(text).wrap().selectable(true))];
     }
     let mut responses=vec![];
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(2.0, 3.0);
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let row = ui.max_rect().width().max(40.0);
         for span in spans {
             match span {
                 Span::Text(text) => {
@@ -167,15 +225,17 @@ pub fn body(ui: &mut egui::Ui, images: &mut Images, text: &str) ->Vec<egui::Resp
                             if let Some(link)=link_in(word.trim_end()) {
                                 // Links open in the browser; trailing punctuation stays plain text.
                                 let start=word.find(link).unwrap_or(0);
-                                let rest=word[start+link.len()..].trim_start_matches(['>']);
+                                let rest=word[start..].get(link.len()..).unwrap_or("").trim_start_matches(['>']);
                                 let shown=if word[..start].ends_with('<'){link}else{&word[..start+link.len()]};
-                                let response=ui.add(egui::Hyperlink::from_label_and_url(egui::RichText::new(shown.trim_start_matches(['<'])).color(LINK),link));
-                                response.context_menu(|ui|{if ui.button("Copy link").clicked(){ui.ctx().copy_text(link.to_owned());ui.close();}});
-                                if !rest.is_empty(){responses.push(ui.add(egui::Label::new(rest).selectable(true)));}
+                                for piece in fitting_pieces(ui, shown.trim_start_matches(['<']), &font, row) {
+                                    let response=ui.add(egui::Hyperlink::from_label_and_url(egui::RichText::new(piece).color(LINK),link));
+                                    response.context_menu(|ui|{if ui.button("Copy link").clicked(){ui.ctx().copy_text(link.to_owned());ui.close();}});
+                                }
+                                if !rest.is_empty(){responses.push(ui.add(egui::Label::new(rest).selectable(true).extend()));}
                             } else if !word.is_empty() {
-                                responses.push(ui.add(
-                                    egui::Label::new(word).selectable(true),
-                                ));
+                                for piece in fitting_pieces(ui, word, &font, row) {
+                                    responses.push(ui.add(egui::Label::new(piece).selectable(true).extend()));
+                                }
                             }
                         }
                         if line.ends_with('\n') {
@@ -184,6 +244,13 @@ pub fn body(ui: &mut egui::Ui, images: &mut Images, text: &str) ->Vec<egui::Resp
                                 egui::Sense::hover(),
                             );
                         }
+                    }
+                }
+                Span::Link { label, url } => {
+                    // A masked link, [label](url): only the label shows, as in Discord.
+                    for piece in fitting_pieces(ui, label, &font, row) {
+                        let response = ui.add(egui::Hyperlink::from_label_and_url(egui::RichText::new(piece).color(LINK), url)).on_hover_text(url);
+                        response.context_menu(|ui|{if ui.button("Copy link").clicked(){ui.ctx().copy_text(url.to_owned());ui.close();}});
                     }
                 }
                 Span::Emoji { label, url } => {
@@ -206,8 +273,7 @@ pub fn body(ui: &mut egui::Ui, images: &mut Images, text: &str) ->Vec<egui::Resp
                 }
                 Span::Mention(name) => {
                     let (fill, color) = mention_colors();
-                    let font = egui::TextStyle::Body.resolve(ui.style());
-                    let galley = ui.painter().layout_no_wrap(name.to_owned(), font, color);
+                    let galley = ui.painter().layout_no_wrap(name.to_owned(), font.clone(), color);
                     let (rect, response) = ui.allocate_exact_size(galley.size() + Vec2::new(4.0, 0.0), egui::Sense::hover());
                     let fill = if response.hovered() { fill.gamma_multiply(1.6) } else { fill };
                     ui.painter().rect_filled(rect, 3, fill);
@@ -507,6 +573,34 @@ mod tests {
         assert_eq!(file_name("https://media.discordapp.net/x/a%3Cb>.gif"),"a%3Cb_.gif");
         assert_eq!(file_name("https://example.com/"),"image.png");
         assert_eq!(file_name("https://example.com/photo"),"photo.png");
+    }
+    /// A real fixupx embed description: escapes, bold markers and masked links.
+    pub(crate) const TWEET: &str = r"Indiana Pacers star Tyrese Haliburton has sustained a left hamstring strain and will miss time, sources tell ESPN\. Pacers doctors and Haliburton are now gathering a clear timeline\.
+
+**[💬](https://x.com/intent/tweet?in_reply_to=2115497882790875386) 2\.5K [🔁](https://x.com/intent/retweet?tweet_id=2115497882790875386) 2\.3K [❤️](https://x.com/intent/like?tweet_id=2115497882790875386) 26\.3K 👁️ 2\.21M **";
+    #[test]
+    fn embed_markdown_shows_like_discord(){
+        assert_eq!(clean_markdown(r"ESPN\. 2\.5K **bold**"),"ESPN. 2.5K bold");
+        let spans=spans("see [the post](https://x.com/a?b=1) now");
+        assert_eq!(spans,vec![Span::Text("see "),Span::Link{label:"the post",url:"https://x.com/a?b=1"},Span::Text(" now")]);
+        assert_eq!(super::spans("[not a link](javascript:alert)"),vec![Span::Text("[not a link](javascript:alert)")]);
+    }
+    #[test]
+    fn long_words_and_links_stay_inside_their_box(){
+        let ctx=egui::Context::default();crate::widgets::fonts(&ctx);ctx.set_pixels_per_point(1.25);let mut images=Images::new(&ctx);
+        let input=||egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,Vec2::new(800.,600.))),..Default::default()};
+        let unbroken=format!("{} https://x.com/{}",TWEET,"y".repeat(300));
+        let mut area=egui::Rect::NOTHING;
+        let mut output=ctx.run(input(),|_|{});
+        for _ in 0..2{output=ctx.run(input(),|ctx|{egui::CentralPanel::default().show(ctx,|ui|{
+            let rect=egui::Rect::from_min_size(egui::pos2(200.,20.),Vec2::new(300.,560.));area=rect;
+            let mut child=ui.new_child(egui::UiBuilder::new().max_rect(rect));body(&mut child,&mut images,&unbroken);
+            let card_area=egui::Rect::from_min_size(egui::pos2(200.,20.),Vec2::new(300.,560.));let mut card=ui.new_child(egui::UiBuilder::new().max_rect(card_area.translate(Vec2::new(0.,0.))));
+            let embed=crate::model::Embed{kind:"rich".into(),title:Some("Shams Charania (@ShamsCharania)".into()),description:Some(TWEET.into()),..Default::default()};embed_card(&mut card,&mut images,&embed,false);
+        });});}
+        let texts:Vec<egui::Rect>=output.shapes.iter().filter_map(|s|match &s.shape{egui::Shape::Text(t)=>Some(t.visual_bounding_rect()).filter(|r|r.is_finite()&&r.width()>0.),_=>None}).collect();
+        assert!(texts.len()>10);
+        for rect in texts{assert!(rect.min.x>=area.min.x-1.&&rect.max.x<=area.max.x+1.,"{rect:?} spills outside {area:?}");}
     }
     #[test]
     fn proxy_pictures_are_fetched_at_display_size_and_open_full_size(){

@@ -379,7 +379,9 @@ impl Eclipse {
             "wide-message"=>{if let Some(last)=self.messages.back().cloned(){
                 let link="https://fixupx.com/shamscharania/status/2115497882790875386?a=-HeFTo9eJrqEKq8qUaM&s=46";
                 let mut first=Message{id:"wide-1".into(),content:format!("{link} @im"),..last.clone()};first.reactions.clear();first.attachments.clear();first.referenced_message=None;
-                first.embeds=vec![crate::model::Embed{kind:"rich".into(),title:Some("Shams Charania (@ShamsCharania)".into()),description:Some("Sources: Indiana Pacers guard Tyrese Haliburton has suffered a torn right Achilles and is expected to miss the remainder of the season, sources tell ESPN. ".repeat(3)),url:Some(link.into()),color:Some(0x1da1f2),..Default::default()}];
+                first.embeds=vec![crate::model::Embed{kind:"rich".into(),title:Some("Shams Charania (@ShamsCharania)".into()),description:Some(r"Indiana Pacers star Tyrese Haliburton has sustained a left hamstring strain and will miss time, sources tell ESPN\. Pacers doctors and Haliburton are now gathering a clear timeline\.
+
+**[💬](https://x.com/intent/tweet?in_reply_to=2115497882790875386) 2\.5K [🔁](https://x.com/intent/retweet?tweet_id=2115497882790875386) 2\.3K [❤️](https://x.com/intent/like?tweet_id=2115497882790875386) 26\.3K 👁️ 2\.21M **".into()),url:Some(link.into()),color:Some(0x1da1f2),..Default::default()}];
                 let mut reply=Message{id:"wide-2".into(),content:"OOOOOOOOOOOO WHY IS EVERYBODY GETTING INJURED".into(),..last.clone()};reply.reactions.clear();reply.embeds.clear();reply.attachments.clear();reply.referenced_message=Some(Box::new(first.clone()));
                 let mut long=Message{id:"wide-3".into(),content:"x".repeat(400),..last};long.reactions.clear();long.embeds.clear();long.attachments.clear();long.referenced_message=None;
                 self.messages.extend([first,reply,long]);}},
