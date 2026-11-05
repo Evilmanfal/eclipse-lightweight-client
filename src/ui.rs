@@ -376,6 +376,13 @@ impl Eclipse {
             "server-zoom"=>{self.prefs.zoom=1.5;self.server_settings=true;},
             "quick-actions"=>{self.preview_gesture=Some("message");if let Some(message)=self.messages.back_mut(){if let Some(user)=&self.user{message.author=user.clone();}}},
             "server-hover"=>self.preview_gesture=Some("server"),
+            "wide-message"=>{if let Some(last)=self.messages.back().cloned(){
+                let link="https://fixupx.com/shamscharania/status/2115497882790875386?a=-HeFTo9eJrqEKq8qUaM&s=46";
+                let mut first=Message{id:"wide-1".into(),content:format!("{link} @im"),..last.clone()};first.reactions.clear();first.attachments.clear();first.referenced_message=None;
+                first.embeds=vec![crate::model::Embed{kind:"rich".into(),title:Some("Shams Charania (@ShamsCharania)".into()),description:Some("Sources: Indiana Pacers guard Tyrese Haliburton has suffered a torn right Achilles and is expected to miss the remainder of the season, sources tell ESPN. ".repeat(3)),url:Some(link.into()),color:Some(0x1da1f2),..Default::default()}];
+                let mut reply=Message{id:"wide-2".into(),content:"OOOOOOOOOOOO WHY IS EVERYBODY GETTING INJURED".into(),..last.clone()};reply.reactions.clear();reply.embeds.clear();reply.attachments.clear();reply.referenced_message=Some(Box::new(first.clone()));
+                let mut long=Message{id:"wide-3".into(),content:"x".repeat(400),..last};long.reactions.clear();long.embeds.clear();long.attachments.clear();long.referenced_message=None;
+                self.messages.extend([first,reply,long]);}},
             "mention-highlight"=>{if let (Some(channel),Some(mut member))=(self.channel.clone(),self.server.members.values().find(|m|m.name()=="Jordan").cloned()){
                 member.user.id="4242".into();self.server.members.insert("4242".into(),member.clone());
                 let label=format!("@{}",member.user.username);self.mention_ids.insert(label.clone(),member.user.id.clone());
@@ -1665,7 +1672,13 @@ A little more room to breathe.","theme_colors":[7558305,2498598]},"guild_member"
                     }
                     let file_height=if self.files.contains_key(&channel.id){32.0}else{0.0};
                     let scroll_height=(ui.available_height()-110.0-file_height).max(60.0);
-                    egui::ScrollArea::vertical().id_salt(("history",&channel.id)).stick_to_bottom(true).max_height(scroll_height).auto_shrink([false,false]).show(ui,|ui| {
+                    // The history gets a fixed area the width of the chat. A message wider than that (a long
+                    // unbroken link, a wide embed) is clipped at the edge instead of widening the whole column,
+                    // which pushed the message box and its buttons off screen.
+                    let (history_rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), scroll_height), egui::Sense::hover());
+                    let mut history = ui.new_child(egui::UiBuilder::new().max_rect(history_rect).layout(*ui.layout()));
+                    history.set_clip_rect(history_rect.intersect(ui.clip_rect()));
+                    egui::ScrollArea::vertical().id_salt(("history",&channel.id)).stick_to_bottom(true).max_height(scroll_height).auto_shrink([false,false]).show(&mut history,|ui| {
                         ui.spacing_mut().item_spacing.y = if self.compact { 0.0 } else { 2.0 };
                         if self.has_older&&!self.preview{
                             let enabled=self.messages.len()<HISTORY_LIMIT;
