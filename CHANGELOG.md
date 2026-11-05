@@ -1,3 +1,19 @@
+# Eclipse 0.8.6 — November 4, 2026
+
+- Redesigned User Settings and Server Settings in Discord's style: switches instead of checkboxes, titled sections with descriptions, accent-coloured sliders, larger dropdowns and fields, theme preview cards, keybind key caps and a round ESC close button.
+- Connections, Devices and Authorized Apps look like Discord's: connection cards with "Display on profile" switches, devices grouped into current and other, and app cards with Deauthorize and a readable permissions list.
+- The server name dropdown is a Discord-style menu.
+- Nitro, Shop and Quests, and the Billing & Nitro settings section, are removed.
+- Clicking someone in the @ suggestion list fills in the mention, and mentions show as highlighted pills while typing and in messages.
+- Picking a GIF sends it straight away instead of pasting its link.
+- Messages from apps and bots built from components (cards, buttons, menus) show properly, with the "used /command" line above.
+- Discord link formatting in messages and embeds shows properly: [text](link) shows as its clickable text, and escapes like 2\.5K no longer show the backslash.
+- Fixed the chat shifting sideways at certain messages (long links and some embeds).
+- Uses much less memory: Windows fonts are no longer copied into memory (about 44 MB less), and a conversation's pictures and GIFs are freed when you leave it.
+- Conversations open faster: message history, channel lists and other lookups run in parallel instead of waiting in one queue, and startup fetches your account, servers and DMs at once.
+- The live connection to Discord is compressed, and events Eclipse doesn't use are skipped, so sign-in and live updates use less data and memory.
+- GIFs appear immediately: the first frame or Discord's preview shows while the rest loads, pictures are downloaded at the size they're shown, and the GIF picker loads small previews instead of full GIF files.
+
 # Eclipse 0.8.5 — October 9, 2026
 
 - Conversations open instantly more often: hovering a channel, DM or group chat loads its latest messages in the background (like Discord), your five most recent DMs load right after sign-in, and the last 30 conversations stay in memory instead of 6. Messages are never written to disk.
